@@ -1,0 +1,56 @@
+[package]
+name = "polymarket-hft-bot"
+version = "2.4.0"
+edition = "2021"
+authors = ["Polymarket HFT Team"]
+description = "High-frequency trading bot for Polymarket using activity spike exploitation"
+license = "MIT"
+
+[dependencies]
+# Core trading infrastructure
+polymarket-hft = "0.0.5"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Ethereum & Blockchain
+ethers = "2.0"
+
+# Database
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-native-tls"] }
+
+# Mathematical operations
+rust_decimal = "1.29"
+
+# CLI Interface
+rustyline = "12.0"
+clap = { version = "4.0", features = ["derive"] }
+
+# UX & Formatting
+colored = "2.0"
+
+# Configuration
+dotenvy = "0.15"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Async utilities
+futures = "0.3"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time handling
+chrono = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PolymarketTradingBotProject>
+    <Meta>
+        <ProjectName>Polymarket HFT Autonomous System (Rust + polymarket-hft)</ProjectName>
+        <TargetMarkets>
+            <Region>Latin America</Region>
+            <Region>United States</Region>
+            <Category>Political Prediction Markets</Category>
+        </TargetMarkets>
+        <Version>2.4.0 (SQLite Architecture Update)</Version>
+        <Objective>
+            Leverage the `polymarket-hft` crate ecosystem to minimize boilerplate and maximize 
+            execution speed for activity spike exploitation, controlled via an async CLI with smart error handling.
+        </Objective>
+    </Meta>
+
+    <SystemArchitecture>
+        <CorePhilosophy>
+            <Type>Integrated Systems Programming</Type>
+            <Description>
+                Utilizes the `polymarket-hft` crate as the central nervous system, 
+                wrapping CLOB, Gamma, and RTDS into a unified async reactor.
+            </Description>
+        </CorePhilosophy>
+        
+        <Components>
+            <Component id="CLOB_Operator">
+                <Type>Off-Chain</Type>
+                <Driver>polymarket-hft::client::clob</Driver>
+                <Function>Order Matching &amp; Signature Management</Function>
+            </Component>
+            
+            <Component id="Blockchain_Layer">
+                <Type>On-Chain (Polygon)</Type>
+                <Driver>ethers-rs (integrated via custom adapter)</Driver>
+                <Function>Settlement and Asset Custody</Function>
+            </Component>
+        </Components>
+    </SystemArchitecture>
+
+    <Modules>
+        <!-- 1. Data Ingestion Module -->
+        <Module id="DataIngestion">
+            <Infrastructure>
+                <Source id="UnifiedStream">
+                    <Library>polymarket-hft</Library>
+                    <Feeds>
+                        <Feed type="CLOB WebSocket">Order Book &amp; Trades</Feed>
+                        <Feed type="RTDS">Real-time underlying asset prices</Feed>
+                        <Feed type="Gamma">Liquidity depth from AMM pools</Feed>
+                    </Feeds>
+                </Source>
+                <Concurrency>
+                    <Model>Tokio Broadcast Channels</Model>
+                    <Description>
+                        The library handles the raw socket maintenance. 
+                        We simply subscribe to the `broadcast` channel it exposes.
+                    </Description>
+                </Concurrency>
+            </Infrastructure>
+            <Storage>
+                <Database>SQLite</Database>
+                <Mode>WAL (Write-Ahead Logging) for high concurrency</Mode>
+                <Interface>sqlx</Interface>
+            </Storage>
+        </Module>
+
+        <!-- 2. Spike Detection Module -->
+        <Module id="SpikeDetection">
+            <Algorithm name="VolumeVelocity">
+                <Formula>V_v = Delta_Volume / Delta_t</Formula>
+                <Implementation>
+                    Consumes `Trade` structs directly from `polymarket-hft::types`.
+                    No need for custom JSON parsing.
+                </Implementation>
+            </Algorithm>
+            
+            <Algorithm name="OrderBookImbalance">
+                <Formula>OBI = (V_bids - V_asks) / (V_bids + V_asks)</Formula>
+            </Algorithm>
+        </Module>
+
+        <!-- 3. Execution & Finance Module -->
+        <Module id="ExecutionEngine">
+            <ExecutionPath>
+                <Library>polymarket-hft::client::clob</Library>
+                <Method>place_order / batch_orders</Method>
+                <Optimization>
+                    Uses pre-calculated EIP-712 domain separators to reduce signing latency.
+                </Optimization>
+            </ExecutionPath>
+            
+            <TreasuryManagement>
+                <Function>Portfolio Tracking</Function>
+                <Integration>
+                    Uses `polymarket-hft::client::data` to fetch consolidated positions.
+                </Integration>
+            </TreasuryManagement>
+        </Module>
+
+        <!-- 4. User Interface & Onboarding Module (UPDATED) -->
+        <Module id="UserInterface">
+            <Type>Async REPL &amp; UX Wrapper</Type>
+            
+            <!-- NEW: Smart Onboarding Logic -->
+            <SubModule id="OnboardingExperience">
+                <Philosophy>
+                    Never crash with a raw stack trace on configuration errors. 
+                    Always guide the user to resolution with actionable steps.
+                </Philosophy>
+                <ErrorMapping>
+                    <Scenario id="Missing_L1_Key">
+                        <Detection>Environment variable `POLYMARKET_PK` is null or empty.</Detection>
+                        <UserMessage>
+                            [!] CONFIGURATION ERROR: Private Key Not Found
+                            ---------------------------------------------------------
+                            We could not find your Polygon L1 Private Key.
+                            
+                            >> ACTION REQUIRED:
+                            1. Create a file named '.env' in the project root folder.
+                            2. Open your browser wallet (MetaMask/Rabby) connected to Polymarket.
+                            3. Export your Private Key (NOT your Seed Phrase).
+                            4. Add this line to the '.env' file:
+                               POLYMARKET_PK=0x...your_key_here...
+                            ---------------------------------------------------------
+                        </UserMessage>
+                    </Scenario>
+                    
+                    <Scenario id="Missing_API_Creds">
+                        <Detection>Missing `CLOB_API_KEY` or `CLOB_PASSPHRASE`.</Detection>
+                        <UserMessage>
+                            [!] AUTH ERROR: API Credentials Missing
+                            ---------------------------------------------------------
+                            We need your CLOB API keys to trade.
+                            
+                            >> ACTION REQUIRED:
+                            1. Log in to https://polymarket.com
+                            2. Go to Settings -> API Keys -> Create New Key.
+                            3. Copy the 'API Key', 'Secret', and 'Passphrase'.
+                            4. Paste them into your '.env' file.
+                            ---------------------------------------------------------
+                        </UserMessage>
+                    </Scenario>
+
+                    <Scenario id="Database_Permission_Error">
+                        <Detection>SQLite file creation failed (Permission Denied).</Detection>
+                        <UserMessage>
+                            [!] SYSTEM ERROR: Cannot create Database File
+                            ---------------------------------------------------------
+                            Could not create 'bot_history.db' in the current folder.
+                            
+                            >> DIAGNOSIS:
+                            - Are you running in a read-only folder?
+                            - Do you have write permissions?
+                            
+                            >> TRY: Run `chmod +w .` or move to a user directory.
+                            ---------------------------------------------------------
+                        </UserMessage>
+                    </Scenario>
+                </ErrorMapping>
+            </SubModule>
+
+            <CommandList>
+                <!-- Information Commands -->
+                <Cmd name="/help">Displays this list of commands.</Cmd>
+                <Cmd name="/currentstate">Shows system health (CPU/RAM), WS connection status, and latency.</Cmd>
+                <Cmd name="/lastbid">Shows details of the last order placed (Time, Market, Size, Price).</Cmd>
+                <Cmd name="/balance">Displays current USDC available and total Portfolio Value (PnL).</Cmd>
+                <Cmd name="/active">Lists all currently open orders in the CLOB.</Cmd>
+                <Cmd name="/markets">Lists the Market IDs currently being monitored.</Cmd>
+                <Cmd name="/pnl">Shows Realized vs Unrealized Profit &amp; Loss for the session.</Cmd>
+
+                <!-- Control Commands -->
+                <Cmd name="/pause">Temporarily pauses new order placement (cancel-only mode).</Cmd>
+                <Cmd name="/resume">Resumes normal trading operations.</Cmd>
+                <Cmd name="/panic">EMERGENCY: Cancels ALL open orders immediately and pauses the bot.</Cmd>
+                <Cmd name="/export">Dumps the current session log to a CSV file.</Cmd>
+            </CommandList>
+            <Library>rustyline (For command history and auto-completion)</Library>
+            <Library>colored (For red/yellow warning text in terminal)</Library>
+        </Module>
+    </Modules>
+
+    <SecurityProtocols>
+        <Authentication>
+            <Level1 id="MasterKey">
+                <Usage>Bootstrap &amp; Withdrawal Signing</Usage>
+                <Safety>Keys injected via ENV, handled by `secrecy` crate wrappers.</Safety>
+            </Level1>
+        </Authentication>
+    </SecurityProtocols>
+
+    <TechnicalStack>
+        <Language>Rust (2021 Edition)</Language>
+        <CoreRuntime>Tokio (Multi-threaded scheduler)</CoreRuntime>
+        <Dependencies>
+            <Dep type="Core">polymarket-hft = "0.0.5"</Dep>
+            <Dep type="Async">tokio = { version = "1", features = ["full"] }</Dep>
+            <Dep type="Serialization">serde = { version = "1", features = ["derive"] }</Dep>
+            <Dep type="Ethereum">ethers = "2.0"</Dep>
+            <Dep type="Database">sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-native-tls"] }</Dep>
+            <Dep type="Math">rust_decimal = "1.29"</Dep>
+            <Dep type="CLI">rustyline = "12.0"</Dep>
+            <Dep type="CLI">clap = "4.0"</Dep>
+            <Dep type="UX">colored = "2.0" (For formatted error messages)</Dep>
+            <Dep type="Config">dotenvy = "0.15" (Loads .env before main)</Dep>
+        </Dependencies>
+    </TechnicalStack>
+
+    <Roadmap>
+        <Phase id="1">
+            <Name>Integration</Name>
+            <Task>Initialize `polymarket_hft::Client`.</Task>
+            <Task>Implement `OnboardingExperience` checks at startup (pre-main loop).</Task>
+        </Phase>
+        <Phase id="2">
+            <Name>Optimization</Name>
+            <Task>Profile memory usage.</Task>
+            <Task>Ensure CLI commands do not lock the trading mutexes for too long.</Task>
+        </Phase>
+    </Roadmap>
+</PolymarketTradingBotProject>
