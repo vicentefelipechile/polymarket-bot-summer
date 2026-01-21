@@ -10,6 +10,9 @@ license = "MIT"
 # Core trading infrastructure
 polymarket-hft = "0.0.5"
 
+# Polymarket CLOB SDK for credential generation
+polymarket-client-sdk = { version = "0.4.1", features = ["clob"] }
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
