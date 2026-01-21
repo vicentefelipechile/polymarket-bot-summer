@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
     tracing::info!("⚠ Trading integration pending - running in demo mode");
 
     // Start TUI
-    run_tui(execution_engine).await?;
+    run_tui(db, execution_engine).await?;
 
     Ok(())
 }

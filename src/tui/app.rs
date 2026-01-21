@@ -12,7 +12,9 @@ pub enum Tab {
     Dashboard,
     Orders,
     Markets,
+    MarketDetail,
     Logs,
+    Docs,
 }
 
 impl Tab {
@@ -20,17 +22,21 @@ impl Tab {
         match self {
             Tab::Dashboard => Tab::Orders,
             Tab::Orders => Tab::Markets,
-            Tab::Markets => Tab::Logs,
-            Tab::Logs => Tab::Dashboard,
+            Tab::Markets => Tab::MarketDetail,
+            Tab::MarketDetail => Tab::Logs,
+            Tab::Logs => Tab::Docs,
+            Tab::Docs => Tab::Dashboard,
         }
     }
 
     pub fn prev(&self) -> Self {
         match self {
-            Tab::Dashboard => Tab::Logs,
+            Tab::Dashboard => Tab::Docs,
             Tab::Orders => Tab::Dashboard,
             Tab::Markets => Tab::Orders,
-            Tab::Logs => Tab::Markets,
+            Tab::MarketDetail => Tab::Markets,
+            Tab::Logs => Tab::MarketDetail,
+            Tab::Docs => Tab::Logs,
         }
     }
 
@@ -39,12 +45,21 @@ impl Tab {
             Tab::Dashboard => "Dashboard",
             Tab::Orders => "Orders",
             Tab::Markets => "Markets",
+            Tab::MarketDetail => "Market Detail",
             Tab::Logs => "Logs",
+            Tab::Docs => "Docs",
         }
     }
 
-    pub fn all() -> [Tab; 4] {
-        [Tab::Dashboard, Tab::Orders, Tab::Markets, Tab::Logs]
+    pub fn all() -> [Tab; 6] {
+        [
+            Tab::Dashboard,
+            Tab::Orders,
+            Tab::Markets,
+            Tab::MarketDetail,
+            Tab::Logs,
+            Tab::Docs,
+        ]
     }
 }
 
@@ -53,6 +68,22 @@ impl Tab {
 pub enum InputMode {
     Normal,
     Command,
+    QuitConfirmation,
+    LeaveMarketConfirmation,
+}
+
+/// Quit confirmation selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitSelection {
+    No, // Default
+    Yes,
+}
+
+/// Leave market confirmation selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaveSelection {
+    No, // Default
+    Yes,
 }
 
 /// Log entry for the logs tab
@@ -71,8 +102,29 @@ pub enum LogLevel {
     Success,
 }
 
+/// Market analysis data for real-time detection visualization
+#[derive(Debug, Clone)]
+pub struct MarketAnalysis {
+    pub volume_history: Vec<(i64, f64)>, // timestamp, volume
+    pub current_velocity: Option<f64>,
+    pub current_obi: Option<f64>,
+    pub recent_events: Vec<crate::types::VolumeVelocityEvent>,
+}
+
+impl Default for MarketAnalysis {
+    fn default() -> Self {
+        Self {
+            volume_history: Vec::new(),
+            current_velocity: None,
+            current_obi: None,
+            recent_events: Vec::new(),
+        }
+    }
+}
+
 /// Main application state
 pub struct App {
+    pub db_pool: crate::database::DbPool,
     pub execution_engine: Arc<ExecutionEngine>,
     pub market_service: MarketService,
     pub current_tab: Tab,
@@ -87,18 +139,34 @@ pub struct App {
     // Command input
     pub input_mode: InputMode,
     pub command_input: String,
+    pub quit_selection: QuitSelection,
+    pub leave_selection: LeaveSelection,
 
     // Markets
     pub available_markets: Vec<MarketInfo>,
     pub joined_markets: Vec<String>,
+    pub watched_markets_info: Vec<MarketInfo>,
     pub market_search_query: String,
     pub selected_market_index: usize,
+    pub selected_watched_market_index: usize,
     pub is_loading_markets: bool,
+
+    // Market analysis
+    pub market_analysis_data: std::collections::HashMap<String, MarketAnalysis>,
+
+    // RNG state
+    rng_state: u64,
+
+    // Docs tab state
+    pub docs_selected_section: usize,
+    pub docs_viewing_content: bool,
+    pub docs_scroll_offset: u16,
 }
 
 impl App {
-    pub fn new(execution_engine: Arc<ExecutionEngine>) -> Self {
+    pub fn new(db_pool: crate::database::DbPool, execution_engine: Arc<ExecutionEngine>) -> Self {
         let mut app = Self {
+            db_pool,
             execution_engine,
             market_service: MarketService::new(),
             current_tab: Tab::Dashboard,
@@ -111,17 +179,52 @@ impl App {
             last_refresh: Instant::now(),
             input_mode: InputMode::Normal,
             command_input: String::new(),
+            quit_selection: QuitSelection::No,
+            leave_selection: LeaveSelection::No,
             available_markets: Vec::new(),
             joined_markets: Vec::new(),
+            watched_markets_info: Vec::new(),
             market_search_query: String::new(),
             selected_market_index: 0,
+            selected_watched_market_index: 0,
             is_loading_markets: false,
+            market_analysis_data: std::collections::HashMap::new(),
+            rng_state: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+            docs_selected_section: 0,
+            docs_viewing_content: false,
+            docs_scroll_offset: 0,
         };
 
         app.add_log(LogLevel::Info, "TUI initialized successfully");
         app.add_log(LogLevel::Info, "Press ':' to enter command mode");
         app.add_log(LogLevel::Info, "Press 'S' to search markets");
+
+        // Load watched markets from database
+        app.add_log(LogLevel::Info, "Loading watched markets...");
         app
+    }
+
+    /// Initialize watched markets - call this after creating App
+    pub async fn init_watched_markets(&mut self) {
+        match crate::markets::load_watched_markets(&self.db_pool).await {
+            Ok(markets) => {
+                self.joined_markets = markets.iter().map(|m| m.id.clone()).collect();
+                self.watched_markets_info = markets;
+                self.add_log(
+                    LogLevel::Success,
+                    &format!("Loaded {} watched markets", self.joined_markets.len()),
+                );
+            }
+            Err(e) => {
+                self.add_log(
+                    LogLevel::Error,
+                    &format!("Failed to load watched markets: {}", e),
+                );
+            }
+        }
     }
 
     pub fn add_log(&mut self, level: LogLevel, message: &str) {
@@ -160,11 +263,82 @@ impl App {
         if let Ok(orders) = self.execution_engine.get_active_orders().await {
             self.active_orders = orders;
         }
+
+        // Simulate market analysis data updates
+        self.simulate_market_data();
+    }
+
+    fn simulate_market_data(&mut self) {
+        let mut rng_state = self.rng_state;
+
+        // Clone market IDs to avoid borrowing self while mutating analysis data
+        let markets: Vec<String> = self
+            .watched_markets_info
+            .iter()
+            .map(|m| m.id.clone())
+            .collect();
+
+        let next_random = |state: &mut u64| -> f64 {
+            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (*state as f64) / (u64::MAX as f64)
+        };
+
+        for market_id in markets {
+            let entry = self
+                .market_analysis_data
+                .entry(market_id.clone())
+                .or_default();
+
+            // Initialize if empty
+            if entry.current_velocity.is_none() {
+                entry.current_velocity = Some(0.0);
+            }
+            if entry.current_obi.is_none() {
+                entry.current_obi = Some(0.0);
+            }
+
+            // Random walk for Velocity (-2000 to +2000)
+            let rnd = next_random(&mut rng_state);
+            if let Some(vel) = entry.current_velocity {
+                let change = (rnd - 0.5) * 200.0; // Change by up to +/- 100
+                let new_vel = (vel + change).clamp(-2000.0, 2000.0);
+                entry.current_velocity = Some(new_vel);
+
+                // Add event if spike
+                if new_vel.abs() > 1000.0 && next_random(&mut rng_state) > 0.95 {
+                    entry.recent_events.insert(
+                        0,
+                        crate::types::VolumeVelocityEvent {
+                            market_id: market_id.clone(),
+                            velocity: new_vel,
+                            volume_delta: change,
+                            time_delta: 0.5,
+                            timestamp: chrono::Utc::now().timestamp(),
+                        },
+                    );
+                    if entry.recent_events.len() > 10 {
+                        entry.recent_events.pop();
+                    }
+                }
+            }
+
+            // Random walk for OBI (-1.0 to 1.0)
+            let rnd2 = next_random(&mut rng_state);
+            if let Some(obi) = entry.current_obi {
+                let change = (rnd2 - 0.5) * 0.1; // Change by up to +/- 0.05
+                let new_obi = (obi + change).clamp(-1.0, 1.0);
+                entry.current_obi = Some(new_obi);
+            }
+        }
+
+        self.rng_state = rng_state;
     }
 
     pub async fn handle_event(&mut self, event: KeyEvent) -> Result<()> {
         match self.input_mode {
             InputMode::Command => self.handle_command_input(event).await,
+            InputMode::QuitConfirmation => self.handle_quit_confirmation(event),
+            InputMode::LeaveMarketConfirmation => self.handle_leave_confirmation(event).await,
             InputMode::Normal => self.handle_normal_input(event).await,
         }
     }
@@ -222,7 +396,7 @@ impl App {
                 if args.is_empty() {
                     self.add_log(LogLevel::Warning, "Usage: /leavemarket <market_id>");
                 } else {
-                    self.leave_market(args[0]);
+                    self.leave_market(args[0]).await;
                 }
             }
             "/trending" | "trending" | "/t" | "t" => {
@@ -290,12 +464,21 @@ impl App {
         // Check if it's an index number
         if let Ok(index) = market_ref.parse::<usize>() {
             if index > 0 && index <= self.available_markets.len() {
-                let market = &self.available_markets[index - 1];
+                let market = self.available_markets[index - 1].clone();
                 let market_id = market.id.clone();
                 let question = market.question.clone();
 
                 if !self.joined_markets.contains(&market_id) {
+                    // Save to database
+                    if let Err(e) =
+                        crate::markets::save_watched_market(&self.db_pool, &market).await
+                    {
+                        self.add_log(LogLevel::Error, &format!("Failed to save market: {}", e));
+                        return;
+                    }
+
                     self.joined_markets.push(market_id.clone());
+                    self.watched_markets_info.push(market);
                     self.add_log(LogLevel::Success, &format!("Joined market: {}", question));
                     self.add_log(LogLevel::Info, &format!("ID: {}", market_id));
                 } else {
@@ -315,9 +498,23 @@ impl App {
             }
         }
 
-        // Otherwise treat as market ID
+        // Otherwise treat as market ID - try to find in available markets
         let market_id = market_ref.to_string();
         if !self.joined_markets.contains(&market_id) {
+            // Try to find the market in available_markets
+            if let Some(market) = self
+                .available_markets
+                .iter()
+                .find(|m| m.id == market_id)
+                .cloned()
+            {
+                if let Err(e) = crate::markets::save_watched_market(&self.db_pool, &market).await {
+                    self.add_log(LogLevel::Error, &format!("Failed to save market: {}", e));
+                    return;
+                }
+                self.watched_markets_info.push(market.clone());
+            }
+
             self.joined_markets.push(market_id.clone());
             self.add_log(LogLevel::Success, &format!("Joined market: {}", market_id));
         } else {
@@ -325,9 +522,16 @@ impl App {
         }
     }
 
-    fn leave_market(&mut self, market_id: &str) {
+    async fn leave_market(&mut self, market_id: &str) {
         if let Some(pos) = self.joined_markets.iter().position(|m| m == market_id) {
+            // Remove from database
+            if let Err(e) = crate::markets::remove_watched_market(&self.db_pool, market_id).await {
+                self.add_log(LogLevel::Error, &format!("Failed to remove from DB: {}", e));
+                return;
+            }
+
             self.joined_markets.remove(pos);
+            self.watched_markets_info.retain(|m| m.id != market_id);
             self.add_log(LogLevel::Info, &format!("Left market: {}", market_id));
         } else {
             self.add_log(
@@ -350,6 +554,96 @@ impl App {
     }
 
     async fn handle_normal_input(&mut self, event: KeyEvent) -> Result<()> {
+        // Handle Docs tab navigation specially
+        if self.current_tab == Tab::Docs {
+            match event.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.docs_viewing_content {
+                        self.docs_scroll_offset = self.docs_scroll_offset.saturating_sub(1);
+                    } else if self.docs_selected_section > 0 {
+                        self.docs_selected_section -= 1;
+                    }
+                    return Ok(());
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.docs_viewing_content {
+                        // Line counts for each section (approximate, allows some scrolling past end)
+                        const DOC_LINE_COUNTS: [u16; 5] = [38, 37, 40, 35, 38];
+                        let max_scroll = DOC_LINE_COUNTS
+                            .get(self.docs_selected_section)
+                            .copied()
+                            .unwrap_or(30)
+                            .saturating_sub(10); // Stop ~10 lines before end so content stays visible
+                        if self.docs_scroll_offset < max_scroll {
+                            self.docs_scroll_offset = self.docs_scroll_offset.saturating_add(1);
+                        }
+                    } else if self.docs_selected_section < 4 {
+                        // 5 sections (0-4)
+                        self.docs_selected_section += 1;
+                    }
+                    return Ok(());
+                }
+                KeyCode::Enter => {
+                    if !self.docs_viewing_content {
+                        self.docs_viewing_content = true;
+                        self.docs_scroll_offset = 0;
+                    }
+                    return Ok(());
+                }
+                KeyCode::Backspace | KeyCode::Left | KeyCode::Esc => {
+                    if self.docs_viewing_content {
+                        self.docs_viewing_content = false;
+                        self.docs_scroll_offset = 0;
+                    } else {
+                        // Allow tab navigation
+                        self.current_tab = self.current_tab.prev();
+                    }
+                    return Ok(());
+                }
+                KeyCode::Right | KeyCode::Tab => {
+                    if !self.docs_viewing_content {
+                        self.current_tab = self.current_tab.next();
+                    }
+                    // When viewing content, right arrow does nothing
+                    return Ok(());
+                }
+                KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    self.input_mode = InputMode::QuitConfirmation;
+                    self.quit_selection = QuitSelection::No;
+                    return Ok(());
+                }
+                KeyCode::Char('1') => {
+                    self.current_tab = Tab::Dashboard;
+                    return Ok(());
+                }
+                KeyCode::Char('2') => {
+                    self.current_tab = Tab::Orders;
+                    return Ok(());
+                }
+                KeyCode::Char('3') => {
+                    self.current_tab = Tab::Markets;
+                    return Ok(());
+                }
+                KeyCode::Char('4') => {
+                    self.current_tab = Tab::MarketDetail;
+                    return Ok(());
+                }
+                KeyCode::Char('5') => {
+                    self.current_tab = Tab::Logs;
+                    return Ok(());
+                }
+                KeyCode::Char('6') => {
+                    self.current_tab = Tab::Docs;
+                    return Ok(());
+                }
+                KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.should_quit = true;
+                    return Ok(());
+                }
+                _ => return Ok(()),
+            }
+        }
+
         match event.code {
             // Enter command mode
             KeyCode::Char(':') | KeyCode::Char('/') => {
@@ -369,10 +663,14 @@ impl App {
                 self.load_trending_markets().await;
             }
 
-            // Market navigation (when in Markets tab)
+            // Market navigation (when in Markets or MarketDetail tab)
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.current_tab == Tab::Markets && self.selected_market_index > 0 {
                     self.selected_market_index -= 1;
+                } else if self.current_tab == Tab::MarketDetail
+                    && self.selected_watched_market_index > 0
+                {
+                    self.selected_watched_market_index -= 1;
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -380,6 +678,11 @@ impl App {
                     && self.selected_market_index < self.available_markets.len().saturating_sub(1)
                 {
                     self.selected_market_index += 1;
+                } else if self.current_tab == Tab::MarketDetail
+                    && self.selected_watched_market_index
+                        < self.watched_markets_info.len().saturating_sub(1)
+                {
+                    self.selected_watched_market_index += 1;
                 }
             }
             KeyCode::Enter => {
@@ -388,10 +691,18 @@ impl App {
                     self.join_market(&index).await;
                 }
             }
+            // Leave market - show confirmation modal (Delete or Backspace in MarketDetail tab)
+            KeyCode::Delete | KeyCode::Backspace => {
+                if self.current_tab == Tab::MarketDetail && !self.watched_markets_info.is_empty() {
+                    self.input_mode = InputMode::LeaveMarketConfirmation;
+                    self.leave_selection = LeaveSelection::No;
+                }
+            }
 
-            // Quit
+            // Quit - show confirmation modal
             KeyCode::Char('q') | KeyCode::Char('Q') => {
-                self.should_quit = true;
+                self.input_mode = InputMode::QuitConfirmation;
+                self.quit_selection = QuitSelection::No; // Default to No
             }
 
             // Tab navigation
@@ -406,7 +717,9 @@ impl App {
             KeyCode::Char('1') => self.current_tab = Tab::Dashboard,
             KeyCode::Char('2') => self.current_tab = Tab::Orders,
             KeyCode::Char('3') => self.current_tab = Tab::Markets,
-            KeyCode::Char('4') => self.current_tab = Tab::Logs,
+            KeyCode::Char('4') => self.current_tab = Tab::MarketDetail,
+            KeyCode::Char('5') => self.current_tab = Tab::Logs,
+            KeyCode::Char('6') => self.current_tab = Tab::Docs,
 
             // Pause/Resume
             KeyCode::Char('p') | KeyCode::Char('P') => {
@@ -463,6 +776,70 @@ impl App {
             _ => {}
         }
 
+        Ok(())
+    }
+
+    fn handle_quit_confirmation(&mut self, event: KeyEvent) -> Result<()> {
+        match event.code {
+            // Toggle selection with Left/Right or Tab
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                self.quit_selection = match self.quit_selection {
+                    QuitSelection::No => QuitSelection::Yes,
+                    QuitSelection::Yes => QuitSelection::No,
+                };
+            }
+            // Confirm selection with Enter
+            KeyCode::Enter => {
+                if self.quit_selection == QuitSelection::Yes {
+                    self.should_quit = true;
+                }
+                self.input_mode = InputMode::Normal;
+            }
+            // Cancel with Escape
+            KeyCode::Esc => {
+                self.input_mode = InputMode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_leave_confirmation(&mut self, event: KeyEvent) -> Result<()> {
+        match event.code {
+            // Toggle selection with Left/Right or Tab
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                self.leave_selection = match self.leave_selection {
+                    LeaveSelection::No => LeaveSelection::Yes,
+                    LeaveSelection::Yes => LeaveSelection::No,
+                };
+            }
+            // Confirm selection with Enter
+            KeyCode::Enter => {
+                if self.leave_selection == LeaveSelection::Yes {
+                    // Get the market to leave
+                    if let Some(market) = self
+                        .watched_markets_info
+                        .get(self.selected_watched_market_index)
+                    {
+                        let market_id = market.id.clone();
+                        self.leave_market(&market_id).await;
+                        // Adjust index if needed
+                        if self.selected_watched_market_index > 0
+                            && self.selected_watched_market_index >= self.watched_markets_info.len()
+                        {
+                            self.selected_watched_market_index =
+                                self.watched_markets_info.len().saturating_sub(1);
+                        }
+                    }
+                }
+                self.input_mode = InputMode::Normal;
+            }
+            // Cancel with Escape
+            KeyCode::Esc => {
+                self.input_mode = InputMode::Normal;
+            }
+            _ => {}
+        }
         Ok(())
     }
 }

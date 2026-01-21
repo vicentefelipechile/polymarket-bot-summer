@@ -1,7 +1,7 @@
 # PoC
 Never tested and never used in production or development.
 
-# Polymarket HFT Autonomous Trading System
+# Polymarket Bot Summer Trading System
 
 [![Rust](https://img.shields.io/badge/rust-2021-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

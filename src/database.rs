@@ -11,16 +11,16 @@ pub async fn init_database(database_path: &str) -> Result<DbPool> {
         .filename(database_path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal);
-    
+
     // Create connection pool
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
         .await?;
-    
+
     // Run migrations to create tables
     create_schema(&pool).await?;
-    
+
     Ok(pool)
 }
 
@@ -40,7 +40,7 @@ async fn create_schema(pool: &DbPool) -> Result<()> {
     )
     .execute(pool)
     .await?;
-    
+
     // Trades table
     sqlx::query(
         r#"
@@ -58,7 +58,7 @@ async fn create_schema(pool: &DbPool) -> Result<()> {
     )
     .execute(pool)
     .await?;
-    
+
     // Orders table
     sqlx::query(
         r#"
@@ -80,7 +80,7 @@ async fn create_schema(pool: &DbPool) -> Result<()> {
     )
     .execute(pool)
     .await?;
-    
+
     // Order book snapshots table
     sqlx::query(
         r#"
@@ -98,7 +98,7 @@ async fn create_schema(pool: &DbPool) -> Result<()> {
     )
     .execute(pool)
     .await?;
-    
+
     // Volume velocity events table
     sqlx::query(
         r#"
@@ -115,7 +115,7 @@ async fn create_schema(pool: &DbPool) -> Result<()> {
     )
     .execute(pool)
     .await?;
-    
+
     // Portfolio snapshots table
     sqlx::query(
         r#"
@@ -131,23 +131,42 @@ async fn create_schema(pool: &DbPool) -> Result<()> {
     )
     .execute(pool)
     .await?;
-    
+
+    // Watched markets table - persists joined markets across sessions
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS watched_markets (
+            id TEXT PRIMARY KEY,
+            question TEXT NOT NULL,
+            volume TEXT,
+            outcomes TEXT,
+            prices TEXT,
+            joined_at INTEGER NOT NULL,
+            active BOOLEAN NOT NULL DEFAULT 1
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     // Create indices for better query performance
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market_id)")
         .execute(pool)
         .await?;
-    
+
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp)")
         .execute(pool)
         .await?;
-    
+
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_orders_market ON orders(market_id)")
         .execute(pool)
         .await?;
-    
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_orderbook_market ON orderbook_snapshots(market_id)")
-        .execute(pool)
-        .await?;
-    
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_orderbook_market ON orderbook_snapshots(market_id)",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }

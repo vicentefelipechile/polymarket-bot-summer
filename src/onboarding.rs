@@ -1,4 +1,4 @@
-//! Onboarding checks for the Polymarket HFT Bot
+//! Onboarding checks for the Polymarket Bot Summer
 //!
 //! This module handles:
 //! - Environment validation (private key, database)
@@ -14,7 +14,9 @@ pub fn run_onboarding_checks() -> Result<(), OnboardingError> {
     println!("{}", "=".repeat(60).bright_cyan());
     println!(
         "{}",
-        "  Polymarket HFT Bot - Initialization".bright_cyan().bold()
+        "  Polymarket Bot Summer - Initialization"
+            .bright_cyan()
+            .bold()
     );
     println!("{}", "=".repeat(60).bright_cyan());
     println!();

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
+use sqlx::Row; // For .get() method on database rows
 
 const GAMMA_API_BASE: &str = "https://gamma-api.polymarket.com";
 
@@ -9,17 +10,22 @@ where
     D: Deserializer<'de>,
 {
     use serde::de::Error;
+    use serde_json::Value;
 
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum StringOrVec {
-        String(String),
-        Vec(Vec<String>),
-    }
+    let value = Value::deserialize(deserializer)?;
 
-    match StringOrVec::deserialize(deserializer)? {
-        StringOrVec::String(s) => {
-            // Try to parse as JSON array
+    match value {
+        Value::Array(arr) => {
+            // Direct array - convert each element to string
+            arr.into_iter()
+                .map(|v| match v {
+                    Value::String(s) => Ok(s),
+                    other => Ok(other.to_string().trim_matches('"').to_string()),
+                })
+                .collect()
+        }
+        Value::String(s) => {
+            // String that might contain a JSON array
             if s.starts_with('[') {
                 serde_json::from_str(&s).map_err(|e| D::Error::custom(e.to_string()))
             } else if s.is_empty() {
@@ -29,7 +35,11 @@ where
                 Ok(vec![s])
             }
         }
-        StringOrVec::Vec(v) => Ok(v),
+        Value::Null => Ok(Vec::new()),
+        other => Err(D::Error::custom(format!(
+            "expected array or string, found: {}",
+            other
+        ))),
     }
 }
 
@@ -68,6 +78,38 @@ pub struct GammaMarket {
         deserialize_with = "deserialize_string_or_vec"
     )]
     pub outcome_prices: Vec<String>,
+}
+
+/// Helper structs for /public-search response
+#[derive(Debug, Deserialize)]
+struct PublicSearchResponse {
+    #[serde(default)]
+    events: Vec<PublicSearchEvent>,
+    #[serde(default)]
+    tags: serde_json::Value,
+    #[serde(default)]
+    profiles: serde_json::Value,
+    #[serde(default)]
+    pagination: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct PublicSearchEvent {
+    #[serde(default)]
+    markets: Vec<PublicSearchMarket>,
+}
+
+/// Market data from /public-search endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicSearchMarket {
+    pub id: String,
+    pub question: String,
+    #[serde(default)]
+    pub volume: Option<String>,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(rename = "enableOrderBook", default)]
+    pub enable_order_book: bool,
 }
 
 /// Simplified market info for display
@@ -109,6 +151,20 @@ impl From<GammaMarket> for MarketInfo {
     }
 }
 
+impl From<PublicSearchMarket> for MarketInfo {
+    fn from(m: PublicSearchMarket) -> Self {
+        Self {
+            id: m.id,
+            question: m.question,
+            active: !m.closed,
+            order_book_enabled: m.enable_order_book,
+            volume: m.volume.unwrap_or_else(|| "0".to_string()),
+            outcomes: Vec::new(), // public-search doesn't provide outcomes
+            prices: Vec::new(),   // public-search doesn't provide prices
+        }
+    }
+}
+
 /// Market service for fetching markets from Polymarket
 pub struct MarketService {
     client: reqwest::Client,
@@ -121,11 +177,11 @@ impl MarketService {
         }
     }
 
-    /// Search markets by keyword
-    pub async fn search_markets(&self, keyword: &str, limit: usize) -> Result<Vec<MarketInfo>> {
+    /// Search markets by keyword using /public-search
+    pub async fn search_markets(&self, keyword: &str, _limit: usize) -> Result<Vec<MarketInfo>> {
         let url = format!(
-            "{}/markets?limit={}&closed=false&active=true",
-            GAMMA_API_BASE, limit
+            "{}/public-search?q={}&search_profiles=false",
+            GAMMA_API_BASE, keyword
         );
 
         let response = self.client.get(&url).send().await?;
@@ -134,19 +190,21 @@ impl MarketService {
             anyhow::bail!("Failed to fetch markets: {}", response.status());
         }
 
-        let markets: Vec<GammaMarket> = response.json().await?;
+        let search_response: PublicSearchResponse = response.json().await?;
 
-        // Filter by keyword (case-insensitive)
-        let keyword_lower = keyword.to_lowercase();
+        // Flatten events -> markets
+        let markets: Vec<PublicSearchMarket> = search_response
+            .events
+            .into_iter()
+            .flat_map(|e| e.markets)
+            .collect();
+
+        // Filter valid CLOB markets that are open and convert
         let filtered: Vec<MarketInfo> = markets
             .into_iter()
-            .filter(|m| {
-                m.question.to_lowercase().contains(&keyword_lower)
-                    || m.description.to_lowercase().contains(&keyword_lower)
-            })
-            .filter(|m| m.enable_order_book) // Only CLOB-enabled markets
+            .filter(|m| m.enable_order_book && !m.closed)
             .map(|m| m.into())
-            .take(20) // Limit results for display
+            .take(20)
             .collect();
 
         Ok(filtered)
@@ -195,4 +253,90 @@ impl Default for MarketService {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ============================================================================
+// Database Persistence Functions
+// ============================================================================
+
+use crate::database::DbPool;
+use chrono::Utc;
+
+/// Save a watched market to the database
+pub async fn save_watched_market(pool: &DbPool, market: &MarketInfo) -> Result<()> {
+    let outcomes_json = serde_json::to_string(&market.outcomes)?;
+    let prices_json = serde_json::to_string(&market.prices)?;
+    let now = Utc::now().timestamp();
+
+    sqlx::query(
+        r#"
+        INSERT OR REPLACE INTO watched_markets 
+        (id, question, volume, outcomes, prices, joined_at, active)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
+        "#,
+    )
+    .bind(&market.id)
+    .bind(&market.question)
+    .bind(&market.volume)
+    .bind(outcomes_json)
+    .bind(prices_json)
+    .bind(now)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Load all active watched markets from the database
+pub async fn load_watched_markets(pool: &DbPool) -> Result<Vec<MarketInfo>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, question, volume, outcomes, prices
+        FROM watched_markets
+        WHERE active = 1
+        ORDER BY joined_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut markets = Vec::new();
+    for row in rows {
+        let id: String = row.get(0);
+        let question: String = row.get(1);
+        let volume: String = row.get(2);
+        let outcomes_json: String = row.get(3);
+        let prices_json: String = row.get(4);
+
+        let outcomes: Vec<String> = serde_json::from_str(&outcomes_json).unwrap_or_default();
+        let prices: Vec<f64> = serde_json::from_str(&prices_json).unwrap_or_default();
+
+        markets.push(MarketInfo {
+            id,
+            question,
+            active: true,
+            order_book_enabled: true,
+            volume,
+            outcomes,
+            prices,
+        });
+    }
+
+    Ok(markets)
+}
+
+/// Remove a watched market from the database (mark as inactive)
+pub async fn remove_watched_market(pool: &DbPool, id: &str) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE watched_markets 
+        SET active = 0
+        WHERE id = ?
+        "#,
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }

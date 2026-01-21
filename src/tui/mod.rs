@@ -17,7 +17,10 @@ use std::io::stdout;
 use std::sync::Arc;
 
 /// Initialize and run the TUI application
-pub async fn run_tui(execution_engine: Arc<ExecutionEngine>) -> Result<()> {
+pub async fn run_tui(
+    db_pool: crate::database::DbPool,
+    execution_engine: Arc<ExecutionEngine>,
+) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -26,7 +29,8 @@ pub async fn run_tui(execution_engine: Arc<ExecutionEngine>) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = App::new(execution_engine);
+    let mut app = App::new(db_pool, execution_engine);
+    app.init_watched_markets().await;
     let mut event_handler = EventHandler::new(100); // 100ms tick rate
 
     // Main loop
