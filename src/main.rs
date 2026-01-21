@@ -1,18 +1,29 @@
 use anyhow::Result;
-use polymarket_hft_bot::{
-    authenticate, init_database, run_onboarding_checks, Config, ExecutionEngine, SpikeDetector, CLI,
+use polymarket_bot_summer::{
+    authenticate, init_database, run_onboarding_checks, run_tui, Config, ExecutionEngine,
+    SpikeDetector,
 };
+use std::fs::File;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
+    // Initialize logging to file (not terminal, to avoid corrupting TUI)
+    let log_file = File::create("bot.log").unwrap_or_else(|_| {
+        // Fallback: if we can't create file, just disable file logging
+        File::open(if cfg!(windows) { "NUL" } else { "/dev/null" }).unwrap()
+    });
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::sync::Mutex::new(log_file))
+                .with_ansi(false),
+        )
         .init();
 
     // Load environment variables
@@ -67,9 +78,8 @@ async fn main() -> Result<()> {
     // TODO: Integrate auth_client with polymarket-hft for actual trading
     tracing::info!("⚠ Trading integration pending - running in demo mode");
 
-    // Start CLI REPL
-    let mut cli = CLI::new(execution_engine)?;
-    cli.run().await?;
+    // Start TUI
+    run_tui(execution_engine).await?;
 
     Ok(())
 }
