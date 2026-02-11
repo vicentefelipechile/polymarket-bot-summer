@@ -83,14 +83,9 @@ pub struct GammaMarket {
 /// Helper structs for /public-search response
 #[derive(Debug, Deserialize)]
 struct PublicSearchResponse {
-    #[serde(default)]
+    #[serde(default, rename = "data")]
     events: Vec<PublicSearchEvent>,
-    #[serde(default)]
-    tags: serde_json::Value,
-    #[serde(default)]
-    profiles: serde_json::Value,
-    #[serde(default)]
-    pagination: serde_json::Value,
+    // Removed unused fields: tags, profiles, pagination
 }
 
 #[derive(Debug, Deserialize)]

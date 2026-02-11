@@ -149,6 +149,39 @@ async fn create_schema(pool: &DbPool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // AI recommendations table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS ai_recommendations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            market_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            reasoning TEXT NOT NULL,
+            analysis TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            personality TEXT NOT NULL,
+            FOREIGN KEY (market_id) REFERENCES markets(market_id)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // AI chat history table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS ai_chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp INTEGER NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     // Create indices for better query performance
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market_id)")
         .execute(pool)

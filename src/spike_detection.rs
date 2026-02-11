@@ -29,7 +29,7 @@ impl SpikeDetector {
             obi_threshold,
         }
     }
-    
+
     /// Calculate volume velocity: V_v = Delta_Volume / Delta_t
     /// Returns true if velocity exceeds threshold
     pub async fn check_volume_velocity(
@@ -38,15 +38,15 @@ impl SpikeDetector {
         current_volume: f64,
     ) -> Result<Option<VolumeVelocityEvent>> {
         let now = Utc::now().timestamp();
-        
+
         // Get previous state for this market
         let event = if let Some(history) = self.volume_history.get(market_id) {
             let volume_delta = current_volume - history.last_volume;
             let time_delta = (now - history.last_timestamp) as f64;
-            
+
             if time_delta > 0.0 {
                 let velocity = volume_delta / time_delta;
-                
+
                 // Check if velocity exceeds threshold
                 if velocity.abs() > self.volume_velocity_threshold {
                     Some(VolumeVelocityEvent {
@@ -65,7 +65,7 @@ impl SpikeDetector {
         } else {
             None
         };
-        
+
         // Update history
         self.volume_history.insert(
             market_id.to_string(),
@@ -74,34 +74,30 @@ impl SpikeDetector {
                 last_timestamp: now,
             },
         );
-        
+
         // If we detected a spike, save it to database
         if let Some(ref evt) = event {
             self.save_velocity_event(evt).await?;
         }
-        
+
         Ok(event)
     }
-    
+
     /// Calculate order book imbalance: OBI = (V_bids - V_asks) / (V_bids + V_asks)
     /// Returns OBI value between -1 and 1
-    pub fn calculate_order_book_imbalance(
-        &self,
-        bids_volume: f64,
-        asks_volume: f64,
-    ) -> f64 {
+    pub fn calculate_order_book_imbalance(&self, bids_volume: f64, asks_volume: f64) -> f64 {
         let total_volume = bids_volume + asks_volume;
         if total_volume == 0.0 {
             return 0.0;
         }
         (bids_volume - asks_volume) / total_volume
     }
-    
+
     /// Check if OBI indicates a significant imbalance
     pub fn is_significant_imbalance(&self, obi: f64) -> bool {
         obi.abs() > self.obi_threshold
     }
-    
+
     async fn save_velocity_event(&self, event: &VolumeVelocityEvent) -> Result<()> {
         sqlx::query(
             r#"
@@ -117,7 +113,7 @@ impl SpikeDetector {
         .bind(event.timestamp)
         .execute(&self.db)
         .await?;
-        
+
         Ok(())
     }
 }
@@ -125,7 +121,7 @@ impl SpikeDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_obi_calculation() {
         let detector = SpikeDetector {
@@ -134,16 +130,20 @@ mod tests {
             volume_velocity_threshold: 1000.0,
             obi_threshold: 0.3,
         };
-        
+
         // Equal volumes = 0 imbalance
         assert_eq!(detector.calculate_order_book_imbalance(100.0, 100.0), 0.0);
-        
+
         // All bids = 1.0
         assert_eq!(detector.calculate_order_book_imbalance(100.0, 0.0), 1.0);
-        
+
         // All asks = -1.0
         assert_eq!(detector.calculate_order_book_imbalance(0.0, 100.0), -1.0);
-        
+
+        // Verify thresholds are set correctly
+        assert_eq!(detector.volume_velocity_threshold, 1000.0);
+        assert_eq!(detector.obi_threshold, 0.3);
+
         // 60/40 split
         let obi = detector.calculate_order_book_imbalance(60.0, 40.0);
         assert!((obi - 0.2).abs() < 0.01);
