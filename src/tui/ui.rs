@@ -126,6 +126,8 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
         Tab::MarketDetail => draw_market_detail(frame, area, app),
         Tab::Logs => draw_logs(frame, area, app),
         Tab::Docs => draw_docs(frame, area, app),
+        Tab::AiChat => draw_ai_chat(frame, area, app),
+        Tab::Settings => app.settings_editor.render(frame, area),
     }
 }
 
@@ -1521,4 +1523,28 @@ fn draw_leave_confirmation_modal(frame: &mut Frame, area: Rect, app: &App) {
         .alignment(Alignment::Center);
 
     frame.render_widget(modal, modal_area);
+}
+
+fn draw_ai_chat(frame: &mut Frame, area: Rect, app: &App) {
+    if app.chat_request_tx.is_some() {
+        // Use the chat rendering module
+        crate::tui::chat::render_chat(frame, area, &app.chat_state);
+    } else {
+        // AI not enabled
+        let msg = Paragraph::new(vec![
+            Line::raw(""),
+            Line::styled(
+                "  AI Chat is not enabled (API Key missing)",
+                Style::default().fg(Color::Yellow),
+            ),
+            Line::raw(""),
+        ])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" AI Chat Disabled "),
+        )
+        .alignment(Alignment::Center);
+        frame.render_widget(msg, area);
+    }
 }

@@ -1,9 +1,20 @@
 mod app;
+pub mod chat; // Make chat module public
+pub mod config_wizard;
 mod events;
+mod password_prompt;
+pub mod settings;
 mod ui;
 
 pub use app::App;
+pub use chat::ChatState;
+pub use config_wizard::ConfigWizard;
 pub use events::EventHandler;
+pub use password_prompt::PasswordPrompt;
+pub use settings::{SettingsAction, SettingsEditor};
+
+// Re-export PendingConfirmation from ai::chatbot
+pub use crate::ai::chatbot::PendingConfirmation;
 
 use crate::execution::ExecutionEngine;
 use anyhow::Result;
@@ -20,6 +31,7 @@ use std::sync::Arc;
 pub async fn run_tui(
     db_pool: crate::database::DbPool,
     execution_engine: Arc<ExecutionEngine>,
+    config: &crate::crypto::SecureConfig,
 ) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
@@ -29,7 +41,7 @@ pub async fn run_tui(
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = App::new(db_pool, execution_engine);
+    let mut app = App::new(db_pool, execution_engine, config);
     app.init_watched_markets().await;
     let mut event_handler = EventHandler::new(100); // 100ms tick rate
 

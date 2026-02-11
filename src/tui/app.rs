@@ -15,6 +15,8 @@ pub enum Tab {
     MarketDetail,
     Logs,
     Docs,
+    AiChat,
+    Settings,
 }
 
 impl Tab {
@@ -25,18 +27,22 @@ impl Tab {
             Tab::Markets => Tab::MarketDetail,
             Tab::MarketDetail => Tab::Logs,
             Tab::Logs => Tab::Docs,
-            Tab::Docs => Tab::Dashboard,
+            Tab::Docs => Tab::AiChat,
+            Tab::AiChat => Tab::Settings,
+            Tab::Settings => Tab::Dashboard,
         }
     }
 
     pub fn prev(&self) -> Self {
         match self {
-            Tab::Dashboard => Tab::Docs,
+            Tab::Dashboard => Tab::Settings,
             Tab::Orders => Tab::Dashboard,
             Tab::Markets => Tab::Orders,
             Tab::MarketDetail => Tab::Markets,
             Tab::Logs => Tab::MarketDetail,
             Tab::Docs => Tab::Logs,
+            Tab::AiChat => Tab::Docs,
+            Tab::Settings => Tab::AiChat,
         }
     }
 
@@ -48,10 +54,12 @@ impl Tab {
             Tab::MarketDetail => "Market Detail",
             Tab::Logs => "Logs",
             Tab::Docs => "Docs",
+            Tab::AiChat => "AI Chat",
+            Tab::Settings => "Settings",
         }
     }
 
-    pub fn all() -> [Tab; 6] {
+    pub fn all() -> [Tab; 8] {
         [
             Tab::Dashboard,
             Tab::Orders,
@@ -59,6 +67,8 @@ impl Tab {
             Tab::MarketDetail,
             Tab::Logs,
             Tab::Docs,
+            Tab::AiChat,
+            Tab::Settings,
         ]
     }
 }
@@ -161,10 +171,23 @@ pub struct App {
     pub docs_selected_section: usize,
     pub docs_viewing_content: bool,
     pub docs_scroll_offset: u16,
+
+    // AI Chatbot
+    // Channels for async communication
+    pub chat_request_tx: Option<tokio::sync::mpsc::Sender<String>>,
+    pub chat_response_rx: Option<tokio::sync::mpsc::Receiver<anyhow::Result<String>>>,
+    pub chat_state: crate::tui::ChatState,
+
+    // Settings
+    pub settings_editor: crate::tui::SettingsEditor,
 }
 
 impl App {
-    pub fn new(db_pool: crate::database::DbPool, execution_engine: Arc<ExecutionEngine>) -> Self {
+    pub fn new(
+        db_pool: crate::database::DbPool,
+        execution_engine: Arc<ExecutionEngine>,
+        config: &crate::crypto::SecureConfig,
+    ) -> Self {
         let mut app = Self {
             db_pool,
             execution_engine,
@@ -189,6 +212,7 @@ impl App {
             selected_watched_market_index: 0,
             is_loading_markets: false,
             market_analysis_data: std::collections::HashMap::new(),
+
             rng_state: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -196,11 +220,59 @@ impl App {
             docs_selected_section: 0,
             docs_viewing_content: false,
             docs_scroll_offset: 0,
+            chat_request_tx: None,
+            chat_response_rx: None, // Will be set by run_tui if AI is enabled
+            chat_state: crate::tui::ChatState::new(),
+            settings_editor: crate::tui::SettingsEditor::from_config(config),
         };
 
         app.add_log(LogLevel::Info, "TUI initialized successfully");
         app.add_log(LogLevel::Info, "Press ':' to enter command mode");
         app.add_log(LogLevel::Info, "Press 'S' to search markets");
+
+        // Initialize AI chatbot if Gemini API key is available
+        if let Some(ref api_key) = config.gemini_api_key {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(10);
+            let (resp_tx, resp_rx) = tokio::sync::mpsc::channel::<anyhow::Result<String>>(10);
+
+            app.chat_request_tx = Some(tx);
+            app.chat_response_rx = Some(resp_rx);
+
+            let api_key_clone = api_key.clone();
+            let personality = config.ai_personality;
+            let db_pool = app.db_pool.clone();
+            let execution_engine = app.execution_engine.clone();
+
+            tokio::spawn(async move {
+                let gemini_client = crate::ai::GeminiClient::new(api_key_clone);
+                let mut chatbot = crate::ai::AiChatbot::new(
+                    gemini_client,
+                    personality,
+                    db_pool,
+                    execution_engine,
+                );
+
+                while let Some(msg) = rx.recv().await {
+                    // Process message
+                    use crate::ai::chatbot::ChatbotResponse;
+                    // Send to AI
+                    let result = chatbot.send_message(msg).await;
+                    // Extract message string from response for now
+                    let response_str = result.map(|r| r.message);
+
+                    if let Err(_) = resp_tx.send(response_str).await {
+                        break; // Receiver dropped
+                    }
+                }
+            });
+
+            app.add_log(LogLevel::Success, "AI Chat ready (Tab 7)");
+        } else {
+            app.add_log(
+                LogLevel::Warning,
+                "AI Chat unavailable - no API key configured",
+            );
+        }
 
         // Load watched markets from database
         app.add_log(LogLevel::Info, "Loading watched markets...");
@@ -242,6 +314,31 @@ impl App {
     }
 
     pub async fn refresh_data(&mut self) {
+        // Poll for AI chat responses
+        // Use take() to detach receiver from self to appease borrow checker
+        if let Some(mut rx) = self.chat_response_rx.take() {
+            while let Ok(result) = rx.try_recv() {
+                self.chat_state.waiting_for_ai = false;
+                match result {
+                    Ok(response_msg) => {
+                        self.chat_state
+                            .history
+                            .push(("model".to_string(), response_msg));
+                        self.add_log(LogLevel::Success, "AI responded");
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Detailed Error: {:#?}", e);
+                        self.add_log(LogLevel::Error, "AI request failed. Check chat.");
+                        self.chat_state
+                            .history
+                            .push(("model".to_string(), error_msg));
+                    }
+                }
+            }
+            // Put receiver back
+            self.chat_response_rx = Some(rx);
+        }
+
         // Refresh every 500ms
         if self.last_refresh.elapsed().as_millis() < 500 {
             return;
@@ -554,6 +651,141 @@ impl App {
     }
 
     async fn handle_normal_input(&mut self, event: KeyEvent) -> Result<()> {
+        // Handle AI Chat tab navigation specially
+        if self.current_tab == Tab::AiChat {
+            if let Some(ref tx) = self.chat_request_tx {
+                match event.code {
+                    // ENTER: Toggle input mode or send message
+                    KeyCode::Enter => {
+                        if self.chat_state.input_active {
+                            // Send message if not empty
+                            if !self.chat_state.input.trim().is_empty() {
+                                let user_message = self.chat_state.input.clone();
+                                self.chat_state.clear_input();
+                                self.chat_state.waiting_for_ai = true;
+                                self.chat_state.input_active = false;
+
+                                // Update local history
+                                self.chat_state
+                                    .history
+                                    .push(("user".to_string(), user_message.clone()));
+
+                                // Send to AI background task
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let _ = tx_clone.send(user_message).await;
+                                });
+                            } else {
+                                // Empty message - just deactivate input
+                                self.chat_state.input_active = false;
+                            }
+                        } else {
+                            // Activate input mode
+                            self.chat_state.input_active = true;
+                        }
+                        return Ok(());
+                    }
+                    // ESC: Cancel input mode
+                    KeyCode::Esc => {
+                        if self.chat_state.input_active {
+                            self.chat_state.input_active = false;
+                            self.chat_state.clear_input();
+                        }
+                        return Ok(());
+                    }
+                    // Backspace: Delete character (only in input mode)
+                    KeyCode::Backspace if self.chat_state.input_active => {
+                        self.chat_state.handle_backspace();
+                        return Ok(());
+                    }
+                    // Text input (only in input mode)
+                    KeyCode::Char(c) if self.chat_state.input_active => {
+                        self.chat_state.handle_char(c);
+                        return Ok(());
+                    }
+                    // Global navigation (only when NOT in input mode)
+                    KeyCode::Tab | KeyCode::Right if !self.chat_state.input_active => {
+                        self.current_tab = self.current_tab.next();
+                        return Ok(());
+                    }
+                    KeyCode::Left | KeyCode::BackTab if !self.chat_state.input_active => {
+                        self.current_tab = self.current_tab.prev();
+                        return Ok(());
+                    }
+                    KeyCode::Char('q') | KeyCode::Char('Q') if !self.chat_state.input_active => {
+                        self.input_mode = InputMode::QuitConfirmation;
+                        self.quit_selection = QuitSelection::No;
+                        return Ok(());
+                    }
+                    // Other shortcuts (only when NOT in input mode)
+                    _ if !self.chat_state.input_active => {
+                        // Fall through to global shortcuts below
+                    }
+                    // In input mode, ignore other keys
+                    _ => {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // Handle Settings tab navigation specially
+        if self.current_tab == Tab::Settings {
+            match event.code {
+                // Up/Down for field navigation (only when NOT editing)
+                KeyCode::Up | KeyCode::Char('k') if !self.settings_editor.is_editing() => {
+                    if self.settings_editor.current_field() > 0 {
+                        self.settings_editor.move_up();
+                    }
+                    return Ok(());
+                }
+                KeyCode::Down | KeyCode::Char('j') if !self.settings_editor.is_editing() => {
+                    if self.settings_editor.current_field() < 6 {
+                        self.settings_editor.move_down();
+                    }
+                    return Ok(());
+                }
+                // Global navigation - ONLY when NOT editing
+                KeyCode::Tab if !self.settings_editor.is_editing() => {
+                    self.current_tab = self.current_tab.next();
+                    return Ok(());
+                }
+                KeyCode::Right if !self.settings_editor.is_editing() => {
+                    self.current_tab = self.current_tab.next();
+                    return Ok(());
+                }
+                KeyCode::Left | KeyCode::BackTab if !self.settings_editor.is_editing() => {
+                    self.current_tab = self.current_tab.prev();
+                    return Ok(());
+                }
+                KeyCode::Char('q') | KeyCode::Char('Q') if !self.settings_editor.is_editing() => {
+                    self.input_mode = InputMode::QuitConfirmation;
+                    self.quit_selection = QuitSelection::No;
+                    return Ok(());
+                }
+                // Delegate all other keys to settings_editor
+                _ => {
+                    use crate::tui::SettingsAction;
+                    let action = self.settings_editor.handle_input(event);
+                    match action {
+                        SettingsAction::RequestSave => {
+                            // TODO: Implement password prompt and save logic
+                            self.settings_editor.set_success(
+                                "Guardado deshabilitado temporalmente - requiere password prompt"
+                                    .to_string(),
+                            );
+                        }
+                        SettingsAction::CancelChanges => {
+                            // Reload from current config (would need to store config reference)
+                            self.add_log(LogLevel::Info, "Cambios cancelados");
+                        }
+                        SettingsAction::None => {}
+                    }
+                    return Ok(());
+                }
+            }
+        }
+
         // Handle Docs tab navigation specially
         if self.current_tab == Tab::Docs {
             match event.code {
@@ -720,6 +952,8 @@ impl App {
             KeyCode::Char('4') => self.current_tab = Tab::MarketDetail,
             KeyCode::Char('5') => self.current_tab = Tab::Logs,
             KeyCode::Char('6') => self.current_tab = Tab::Docs,
+            KeyCode::Char('7') => self.current_tab = Tab::AiChat,
+            KeyCode::Char('8') => self.current_tab = Tab::Settings,
 
             // Pause/Resume
             KeyCode::Char('p') | KeyCode::Char('P') => {
