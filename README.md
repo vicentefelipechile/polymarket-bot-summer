@@ -5,7 +5,7 @@
 
 Experimental high-frequency trading bot for Polymarket prediction markets, built in Rust. Explores activity spike detection using volume velocity and order book imbalance algorithms, with an async CLI interface and SQLite persistence.
 
-> ⚠️ Proof of concept — not tested in production.
+> Proof of concept — not tested in production.
 
 ## ⚠️ Disclaimer
 
