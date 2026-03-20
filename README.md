@@ -1,12 +1,11 @@
-# PoC
-Never tested and never used in production or development.
-
-# Polymarket Bot Summer Trading System
+# Polymarket Bot Summer
 
 [![Rust](https://img.shields.io/badge/rust-2021-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A high-frequency trading bot for Polymarket prediction markets, leveraging the `polymarket-hft` crate for activity spike exploitation with an intuitive async CLI interface.
+Experimental high-frequency trading bot for Polymarket prediction markets, built in Rust. Explores activity spike detection using volume velocity and order book imbalance algorithms, with an async CLI interface and SQLite persistence.
+
+> ⚠️ Proof of concept — not tested in production.
 
 ## ⚠️ Disclaimer
 
