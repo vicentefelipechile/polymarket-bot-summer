@@ -275,6 +275,9 @@ impl ConfigWizard {
                     obi_threshold: self.obi_threshold.parse().unwrap(),
                     database_path: "./bot.db".to_string(),
                     rpc_url: None,
+                    // Simulation defaults; not configured in the first-run wizard.
+                    auto_simulate_on_insufficient_funds: false,
+                    simulation_starting_balance: 1000.0,
                     gemini_api_key: if self.ai_enabled && !self.gemini_api_key.is_empty() {
                         Some(self.gemini_api_key.clone())
                     } else {

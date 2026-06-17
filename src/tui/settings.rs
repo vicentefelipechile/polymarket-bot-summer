@@ -287,6 +287,9 @@ impl SettingsEditor {
             obi_threshold: self.obi_threshold.parse().unwrap_or(original.obi_threshold),
             database_path: original.database_path.clone(), // Never change
             rpc_url: original.rpc_url.clone(),
+            // Simulation settings are not edited in this view yet; carry them through.
+            auto_simulate_on_insufficient_funds: original.auto_simulate_on_insufficient_funds,
+            simulation_starting_balance: original.simulation_starting_balance,
             gemini_api_key: if self.gemini_api_key.is_empty() {
                 None
             } else {

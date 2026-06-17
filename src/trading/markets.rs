@@ -99,6 +99,14 @@ pub struct GammaMarket {
         deserialize_with = "deserialize_string_or_vec"
     )]
     pub outcome_prices: Vec<String>,
+    // CLOB token IDs (one per outcome) — the asset/token the order book is keyed by.
+    // Like `outcomes`, Gamma sends this as an array, a JSON-encoded string, or null.
+    #[serde(
+        rename = "clobTokenIds",
+        default,
+        deserialize_with = "deserialize_string_or_vec"
+    )]
+    pub clob_token_ids: Vec<String>,
 }
 
 /// Helper structs for /public-search response
@@ -142,6 +150,13 @@ pub struct PublicSearchMarket {
         deserialize_with = "deserialize_string_or_vec"
     )]
     pub outcome_prices: Vec<String>,
+    // CLOB token IDs (one per outcome) — see GammaMarket for the same field's shape rules.
+    #[serde(
+        rename = "clobTokenIds",
+        default,
+        deserialize_with = "deserialize_string_or_vec"
+    )]
+    pub clob_token_ids: Vec<String>,
 }
 
 /// Simplified market info for display
@@ -154,6 +169,10 @@ pub struct MarketInfo {
     pub volume: String,
     pub outcomes: Vec<String>,
     pub prices: Vec<f64>,
+    // CLOB token IDs aligned by index with `outcomes`. Required to query the order book,
+    // which is keyed by token_id (not the market's condition id). May be empty for results
+    // that didn't carry it.
+    pub token_ids: Vec<String>,
 }
 
 impl From<GammaMarket> for MarketInfo {
@@ -179,6 +198,7 @@ impl From<GammaMarket> for MarketInfo {
             volume: m.volume,
             outcomes: m.outcomes,
             prices,
+            token_ids: m.clob_token_ids,
         }
     }
 }
@@ -206,6 +226,7 @@ impl From<PublicSearchMarket> for MarketInfo {
             volume: m.volume.unwrap_or_else(|| "0".to_string()),
             outcomes: m.outcomes,
             prices,
+            token_ids: m.clob_token_ids,
         }
     }
 }
@@ -316,13 +337,14 @@ impl Default for MarketService {
 pub async fn save_watched_market(pool: &DbPool, market: &MarketInfo) -> Result<()> {
     let outcomes_json = serde_json::to_string(&market.outcomes)?;
     let prices_json = serde_json::to_string(&market.prices)?;
+    let token_ids_json = serde_json::to_string(&market.token_ids)?;
     let now = Utc::now().timestamp();
 
     sqlx::query(
         r#"
-        INSERT OR REPLACE INTO watched_markets 
-        (id, question, volume, outcomes, prices, joined_at, active)
-        VALUES (?, ?, ?, ?, ?, ?, 1)
+        INSERT OR REPLACE INTO watched_markets
+        (id, question, volume, outcomes, prices, token_ids, joined_at, active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
         "#,
     )
     .bind(&market.id)
@@ -330,6 +352,7 @@ pub async fn save_watched_market(pool: &DbPool, market: &MarketInfo) -> Result<(
     .bind(&market.volume)
     .bind(outcomes_json)
     .bind(prices_json)
+    .bind(token_ids_json)
     .bind(now)
     .execute(pool)
     .await?;
@@ -341,7 +364,7 @@ pub async fn save_watched_market(pool: &DbPool, market: &MarketInfo) -> Result<(
 pub async fn load_watched_markets(pool: &DbPool) -> Result<Vec<MarketInfo>> {
     let rows = sqlx::query(
         r#"
-        SELECT id, question, volume, outcomes, prices
+        SELECT id, question, volume, outcomes, prices, token_ids
         FROM watched_markets
         WHERE active = 1
         ORDER BY joined_at DESC
@@ -357,9 +380,14 @@ pub async fn load_watched_markets(pool: &DbPool) -> Result<Vec<MarketInfo>> {
         let volume: String = row.get(2);
         let outcomes_json: String = row.get(3);
         let prices_json: String = row.get(4);
+        // Older rows (pre-token_ids column) store NULL; treat as empty.
+        let token_ids_json: Option<String> = row.get(5);
 
         let outcomes: Vec<String> = serde_json::from_str(&outcomes_json).unwrap_or_default();
         let prices: Vec<f64> = serde_json::from_str(&prices_json).unwrap_or_default();
+        let token_ids: Vec<String> = token_ids_json
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_default();
 
         markets.push(MarketInfo {
             id,
@@ -369,6 +397,7 @@ pub async fn load_watched_markets(pool: &DbPool) -> Result<Vec<MarketInfo>> {
             volume,
             outcomes,
             prices,
+            token_ids,
         });
     }
 

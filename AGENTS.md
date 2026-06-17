@@ -19,9 +19,13 @@ on Polymarket. It is a **proof of concept** — not production-tested, handles r
 - **AI:** optional market-analysis + chatbot powered by **Google Gemini**, with selectable
   "personalities" (`Summer`, `Anna`).
 - **Persistence:** SQLite via `sqlx` (WAL mode).
-- **Trading:** integration with `polymarket-hft` / `polymarket-client-sdk` is **partially
-  stubbed**. `main.rs` logs *"Trading integration pending - running in demo mode"*. Do not
-  assume orders actually reach the CLOB; mark incomplete paths with `// TODO:` + a reason.
+- **Trading:** the **real** submission path to `polymarket-hft` / `polymarket-client-sdk` is
+  **still stubbed** — `main.rs` logs *"Trading integration pending - running in demo mode"*,
+  real orders are validated/persisted locally as `PENDING` but do **not** reach the CLOB.
+  However, the read-only **order book** (`/book`, unauthenticated) and the **simulation
+  (paper-trading)** path are fully functional: simulated orders fill against live book depth
+  and settle against a separate virtual wallet (see §4 "Trading & simulation"). Mark any
+  remaining incomplete real path with `// TODO:` + a reason.
 
 ### Entry flow (`src/main.rs`)
 
@@ -31,7 +35,8 @@ on Polymarket. It is a **proof of concept** — not production-tested, handles r
    first-time wizard, which saves the encrypted file.
 3. `config.validate()`.
 4. CLOB `authenticate(&config.private_key)` → `init_database(&config.database_path)`.
-5. Build `SpikeDetector` and `ExecutionEngine`.
+5. Build `SpikeDetector` and `ExecutionEngine` (the engine takes the `DbPool` so it can
+   persist orders/positions and own the `SimulationEngine`).
 6. If `ai_enabled` and a Gemini key is set, spawn the periodic AI analysis task.
 7. `run_tui(...)` runs the main event loop until quit, then restores the terminal.
 
@@ -59,7 +64,9 @@ src/
 ├── trading/            # trading domain
 │   ├── mod.rs          # wiring
 │   ├── auth.rs         # CLOB authentication -> AuthenticatedClient
-│   ├── execution.rs    # ExecutionEngine: order placement (partly stubbed)
+│   ├── execution.rs    # ExecutionEngine: the single trade entry point (real path partly stubbed)
+│   ├── order_book.rs   # OrderBookService: real /book depth + VWAP fill simulation
+│   ├── simulation.rs   # SimulationEngine: paper trading vs a separate virtual wallet
 │   ├── markets.rs      # MarketService + MarketInfo: Gamma API + DB-backed market data
 │   └── spike_detection.rs # SpikeDetector: volume velocity + order-book imbalance
 │
@@ -83,11 +90,12 @@ src/
     │   ├── mod.rs      # draw(frame, app) frame layout + draw_content dispatcher (lifecycle)
     │   ├── chrome.rs   # persistent chrome: header, tab bar, command input, footer
     │   ├── dashboard.rs# Dashboard panel
-    │   ├── orders.rs   # Orders panel
+    │   ├── orders.rs   # Orders panel (real + simulated, SIMULATED pill)
+    │   ├── positions.rs# Positions panel (holdings + realized PnL, real + simulated)
     │   ├── markets.rs  # Markets list + Market Detail panels
     │   ├── logs.rs     # Logs panel
     │   ├── docs.rs     # Docs panel + its section copy (get_doc_preview/get_doc_content)
-    │   └── modals.rs   # quit / leave-market confirmation modals
+    │   └── modals.rs   # quit / leave-market confirmation modals + trade-entry form
     ├── events.rs       # EventHandler: tick + input polling
     ├── chat.rs         # ChatState: AI chat view state
     ├── config_wizard.rs# ConfigWizard: first-run setup flow
@@ -249,10 +257,19 @@ imports, ever.
   `SecureConfig`'s secret fields (e.g. `secrecy`/`zeroize`) is a welcome improvement.
 - **Adding a config setting:** extend the `SecureConfig` struct in
   `config/secure_config.rs`, then add a default in `migrate_from_env`, a `validate()` rule
-  if constrained, and wiring in `ConfigWizard` / `SettingsEditor`. Old `summer.bot` files
-  must still deserialize or migrate.
+  if constrained, and wiring in `ConfigWizard` / `SettingsEditor` (its `to_config` must carry
+  the field through). Old `summer.bot` files must still deserialize or migrate — give new
+  fields `#[serde(default = "...")]` so pre-existing encrypted configs still load. The
+  simulation flags (`auto_simulate_on_insufficient_funds`, `simulation_starting_balance`)
+  were added exactly this way.
 - **Database:** schema lives in `data/database.rs::create_schema` (idempotent
-  `CREATE TABLE IF NOT EXISTS`). WAL mode required. Use `sqlx::query`/`query_as`.
+  `CREATE TABLE IF NOT EXISTS`). WAL mode required. Use `sqlx::query`/`query_as`. SQLite has
+  no `ADD COLUMN IF NOT EXISTS`, so columns added to an existing table go through
+  `run_column_migrations`, which tolerates the "duplicate column" error on an already-migrated
+  DB. Trading state lives in three tables: `orders` (real + simulated, with `execution_mode`
+  + `outcome_index`), `positions` (holdings keyed by `market_id, outcome_index,
+  execution_mode`), and `simulation_account` (the single-row virtual wallet). `orders` and
+  `positions` FK to `markets`, so writes go through `ensure_market` first.
 - **AI calls:** go through `GeminiClient` (`ai/client.rs`); rate-limited with `governor`.
   No ad-hoc HTTP to Gemini from feature code.
 - **Market data (Gamma API):** all market fetching goes through `MarketService`
@@ -275,12 +292,44 @@ imports, ever.
     three — reuse it for any new array-ish Gamma field; don't re-derive plain `Vec<String>`.
   - Prefer `conditionId` over the numeric `id` for a market's identity (it's what trading
     uses); fall back to `id` only when `conditionId` is empty.
+- **Trading & simulation (paper trading):** `ExecutionEngine::place_trade(TradeRequest)` is
+  the **single entry point** for every order, real or simulated — don't add a second path.
+  A `TradeRequest` carries `market_id`, the outcome's CLOB `token_id`, `outcome_index`,
+  `side`, `size`, and `mode` (`ExecutionMode::{Real, Simulated}`).
+  - **Fills are computed against the real CLOB order book.** `OrderBookService`
+    (`trading/order_book.rs`) wraps an **unauthenticated** `clob::Client` (the `/book`
+    endpoint needs no auth) and walks live `bids`/`asks` to a volume-weighted fill via the
+    pure, unit-tested `walk_levels`. It errors on empty/insufficient depth — never a silent
+    partial fill. The order book is keyed by **`token_id`** (per outcome), captured from
+    Gamma's `clobTokenIds` into `MarketInfo::token_ids` — not the market `condition_id`.
+  - **Simulated orders** go to `SimulationEngine` (`trading/simulation.rs`): same real-book
+    fill plus a small slippage, settled against a **separate virtual wallet**
+    (`simulation_account`), tagged `ExecutionMode::Simulated`. They appear beside real orders
+    in the Orders panel with a `SIMULATED` pill, and as simulated positions in the Positions
+    panel. The dashboard shows the real and simulated balances separately.
+  - **Position math** is shared (and tested) in `Position::{apply_buy, apply_sell}`:
+    volume-weighted average cost on buys, realized PnL banked on sells (basis unchanged,
+    reset when flat). Reuse it; don't re-derive avg-price logic.
+  - **Auto-fallback (config-gated):** when `auto_simulate_on_insufficient_funds` is set and a
+    **real** buy lacks funds, the engine retries it as `Simulated`, logs a `WARN`, and returns
+    the simulated order. Real CLOB submission itself is still `// TODO:` (orders are recorded
+    `PENDING` locally); simulated orders are fully functional.
+  - **Commands / keys:** `/buy <#> <size>`, `/sell <#> <size>` (1-based outcome on the
+    selected watched market), `/sim on|off` (toggles the command-mode default), and `b` in
+    Market Detail opens the trade-entry form.
 - **Input modes (`tui/app.rs`):** all keyboard handling is dispatched by `InputMode` in
   `App::handle_event`. To add a modal/sub-mode, follow the existing pattern: add an
   `InputMode` variant, route it in `handle_event`, and give it a **dedicated handler**
   (`handle_<mode>`). Don't bolt conditional sub-states onto `handle_normal_input` — each
   mode owns its keymap. Current modes: `Normal`, `Command`, `QuitConfirmation`,
-  `LeaveMarketConfirmation`, `TabNavigation`.
+  `LeaveMarketConfirmation`, `TabNavigation`, `TradeEntry`. `TradeEntry` is the buy/sell
+  form opened with `b` from Market Detail (handled by `handle_trade_entry`); its modal is
+  drawn by `modals::draw_trade_entry_modal`. The form is a **pointer-driven field menu**:
+  a `TradeField` (`Outcome`/`Side`/`Mode`/`Size`/`Submit`, ordered by `TradeField::ALL`)
+  holds focus, `↑/↓` move it, and `Enter` acts on it — binary fields (`Side`/`Mode`) toggle
+  in place, multi-value fields (`Outcome`/`Size`) open an edit (`TradeEntryState::editing`,
+  routed to `handle_trade_entry_editing`), and `Submit` places the order. Adding a field
+  means extending `TradeField::ALL` and the `activate_trade_field` match.
 - **Panel switching is Esc-triggered and highlight-then-activate.** From a panel, **`Esc`**
   enters `InputMode::TabNavigation`. Inside that mode, `←`/`→`/`Tab`/`BackTab` move a
   **highlighted** tab (`App::highlighted_tab`) without changing the shown content; **Enter**
@@ -316,11 +365,11 @@ cargo clippy             # lint — the library is clean; keep it that way
 cargo fmt                # rustfmt — run before committing
 ```
 
-> `cargo clippy` is **clean for the library** (zero warnings). The only remaining warnings
-> are in two unit tests (`ai/analyzer.rs`, `trading/spike_detection.rs`) that build a struct
-> with a `db: unimplemented!()` placeholder — clippy flags the diverging expression as
-> unreachable/unused. These are harmless test scaffolding. The rule is: **keep the library
-> at zero warnings** — don't add new ones, and fix any in a file you touch. Run
+> `cargo clippy` is **clean for the library** (zero warnings). One unit test
+> (`ai/analyzer.rs::test_prompt_building`) builds a struct with a `db: unimplemented!()`
+> placeholder; it both fails at runtime and trips clippy on the diverging expression. This is
+> pre-existing, harmless test scaffolding (not a library issue). The rule is: **keep the
+> library at zero warnings** — don't add new ones, and fix any in a file you touch. Run
 > `cargo fmt` before committing.
 
 - First run with no `./summer.bot` triggers the wizard; later runs ask for the password.

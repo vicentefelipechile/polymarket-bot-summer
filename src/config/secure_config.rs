@@ -17,6 +17,16 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 // =========================================================================================================
+// Defaults
+// =========================================================================================================
+
+/// Default virtual balance seeded into the simulation wallet (USDC). Also the serde default
+/// so old `summer.bot` files written before this field deserialize without error.
+fn default_simulation_starting_balance() -> f64 {
+    1000.0
+}
+
+// =========================================================================================================
 // Types
 // =========================================================================================================
 
@@ -35,6 +45,15 @@ pub struct SecureConfig {
     // System.
     pub database_path: String,
     pub rpc_url: Option<String>,
+
+    // Simulation (paper trading).
+    /// When a real order lacks sufficient funds, retry it as a simulated order instead of
+    /// failing. Lets the bot keep "trading" on paper when the real wallet is empty.
+    #[serde(default)]
+    pub auto_simulate_on_insufficient_funds: bool,
+    /// Starting balance (USDC) seeded into the separate virtual simulation wallet.
+    #[serde(default = "default_simulation_starting_balance")]
+    pub simulation_starting_balance: f64,
 
     // AI configuration.
     pub gemini_api_key: Option<String>,
@@ -96,6 +115,16 @@ impl SecureConfig {
                 .unwrap_or_else(|_| "./bot_history.db".to_string()),
             rpc_url: env::var("RPC_URL").ok(),
 
+            // Simulation configuration.
+            auto_simulate_on_insufficient_funds: env::var("AUTO_SIMULATE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(false),
+            simulation_starting_balance: env::var("SIMULATION_STARTING_BALANCE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_else(default_simulation_starting_balance),
+
             // AI configuration (defaults for migration).
             gemini_api_key: env::var("GEMINI_API_KEY").ok(),
             ai_personality: AiPersonality::default(),
@@ -144,6 +173,11 @@ impl SecureConfig {
             anyhow::bail!("AI analysis frequency must be greater than 0");
         }
 
+        // Validate simulation settings.
+        if self.simulation_starting_balance <= 0.0 {
+            anyhow::bail!("Simulation starting balance must be greater than 0");
+        }
+
         Ok(())
     }
 
@@ -159,6 +193,8 @@ impl SecureConfig {
             obi_threshold: 0.3,
             database_path: "./test_bot_history.db".to_string(),
             rpc_url: None,
+            auto_simulate_on_insufficient_funds: false,
+            simulation_starting_balance: 1000.0,
             gemini_api_key: None,
             ai_personality: AiPersonality::Summer,
             ai_enabled: false,

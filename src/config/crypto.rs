@@ -173,6 +173,8 @@ mod tests {
             obi_threshold: 0.3,
             database_path: "./test.db".to_string(),
             rpc_url: Some("https://polygon-rpc.com".to_string()),
+            auto_simulate_on_insufficient_funds: false,
+            simulation_starting_balance: 1000.0,
             gemini_api_key: Some("test_api_key".to_string()),
             ai_personality: AiPersonality::Summer,
             ai_enabled: true,

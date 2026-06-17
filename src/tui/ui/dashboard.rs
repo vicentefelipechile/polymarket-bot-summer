@@ -52,14 +52,34 @@ pub(super) fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
                     theme::fg(palette::PRIMARY),
                 ),
             ]),
-            Line::raw(""),
             Line::from(vec![
                 Span::raw("  P&L: "),
                 Span::styled(format!("{:+.2}", pnl), theme::fg(pnl_color)),
             ]),
             Line::raw(""),
-            // The numbers above come from a stubbed engine; flag it rather than imply funds.
-            Line::styled("  demo — no live account", theme::fg(palette::FAINT)),
+            // Separate virtual simulation wallet (paper trading), tracked independently.
+            Line::from(vec![
+                Span::styled(" SIMULATED ", theme::pill(palette::ACCENT, palette::TEXT)),
+                Span::raw(" "),
+                Span::styled(
+                    format!("${:.2}", p.simulated_balance),
+                    theme::fg(palette::ACCENT),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw("  Sim P&L: "),
+                Span::styled(
+                    format!("{:+.2}", p.simulated_realized_pnl),
+                    theme::fg(if p.simulated_realized_pnl >= 0.0 {
+                        palette::POSITIVE
+                    } else {
+                        palette::DANGER
+                    }),
+                ),
+            ]),
+            Line::raw(""),
+            // The real numbers above come from a stubbed engine; flag it rather than imply funds.
+            Line::styled("  real: demo — no live account", theme::fg(palette::FAINT)),
         ]
     } else {
         vec![Line::styled("  Loading...", theme::fg(palette::SELECTED))]

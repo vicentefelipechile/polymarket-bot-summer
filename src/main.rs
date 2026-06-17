@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
     tracing::info!("✓ Spike detector initialized");
 
     // Initialize execution engine
-    let execution_engine = Arc::new(ExecutionEngine::new(config.clone()));
+    let execution_engine = Arc::new(ExecutionEngine::new(config.clone(), db.clone())?);
     tracing::info!("✓ Execution engine initialized");
 
     // Initialize AI if enabled

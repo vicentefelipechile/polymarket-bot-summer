@@ -16,6 +16,7 @@ mod logs;
 mod markets;
 mod modals;
 mod orders;
+mod positions;
 
 // =========================================================================================================
 // Imports
@@ -76,6 +77,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.input_mode == InputMode::LeaveMarketConfirmation {
         modals::draw_leave_confirmation_modal(frame, area, app);
     }
+
+    // Draw trade-entry form on top if active
+    if app.input_mode == InputMode::TradeEntry {
+        modals::draw_trade_entry_modal(frame, area, app);
+    }
 }
 
 /// Dispatch the content area to the active tab's renderer.
@@ -83,6 +89,7 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
     match app.current_tab {
         Tab::Dashboard => dashboard::draw_dashboard(frame, area, app),
         Tab::Orders => orders::draw_orders(frame, area, app),
+        Tab::Positions => positions::draw_positions(frame, area, app),
         Tab::Markets => markets::draw_markets(frame, area, app),
         Tab::MarketDetail => markets::draw_market_detail(frame, area, app),
         Tab::Logs => logs::draw_logs(frame, area, app),

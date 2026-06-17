@@ -17,10 +17,11 @@ use crate::tui::theme::{self, palette};
 // Constants
 // =========================================================================================================
 
-const DOC_SECTIONS: [&str; 5] = [
+const DOC_SECTIONS: [&str; 6] = [
     "📖 How to Use This Bot",
     "🎯 What is Polymarket?",
     "💹 Trading Mechanics",
+    "🧪 Simulation & Trading",
     "📊 Spike Detection",
     "📚 References",
 ];
@@ -76,6 +77,20 @@ fn get_doc_preview(section: usize) -> Vec<Line<'static>> {
         ],
         3 => vec![
             Line::styled(
+                "  Simulation & Trading",
+                Style::default().fg(Color::Yellow).bold(),
+            ),
+            Line::raw(""),
+            Line::raw("  Buy/sell positions for real or in"),
+            Line::raw("  paper-trading mode (SIMULATED)."),
+            Line::raw(""),
+            Line::styled(
+                "  Press Enter to read more...",
+                Style::default().fg(Color::Gray),
+            ),
+        ],
+        4 => vec![
+            Line::styled(
                 "  Spike Detection",
                 Style::default().fg(Color::Yellow).bold(),
             ),
@@ -88,7 +103,7 @@ fn get_doc_preview(section: usize) -> Vec<Line<'static>> {
                 Style::default().fg(Color::Gray),
             ),
         ],
-        4 => vec![
+        5 => vec![
             Line::styled("  References", Style::default().fg(Color::Yellow).bold()),
             Line::raw(""),
             Line::raw("  Sources and links to learn"),
@@ -123,17 +138,18 @@ fn get_doc_content(section: usize) -> Vec<Line<'static>> {
             Line::styled("  NAVIGATION", Style::default().fg(Color::Green).bold()),
             Line::raw("  ─────────────────────────────────────────────────"),
             Line::raw("  • Press Esc to enter panel navigation, then ←/→"),
-            Line::raw("  • Press 1-8 to jump directly to a specific panel"),
+            Line::raw("  • Press 1-9 to jump directly to a specific panel"),
             Line::raw("  • Use ↑/↓ arrow keys to navigate lists"),
             Line::raw(""),
             Line::styled("  TABS OVERVIEW", Style::default().fg(Color::Green).bold()),
             Line::raw("  ─────────────────────────────────────────────────"),
-            Line::raw("  [1] Dashboard  - View portfolio and system status"),
-            Line::raw("  [2] Orders     - See your active orders"),
-            Line::raw("  [3] Markets    - Search and join markets to watch"),
-            Line::raw("  [4] Detail     - Detailed view of watched markets"),
-            Line::raw("  [5] Logs       - View application logs and events"),
-            Line::raw("  [6] Docs       - This documentation"),
+            Line::raw("  [1] Dashboard  - Portfolio (real + simulated) and status"),
+            Line::raw("  [2] Orders     - See your orders (real + SIMULATED)"),
+            Line::raw("  [3] Positions  - Open holdings and realized PnL"),
+            Line::raw("  [4] Markets    - Search and join markets to watch"),
+            Line::raw("  [5] Detail     - Detailed view of watched markets"),
+            Line::raw("  [6] Logs       - View application logs and events"),
+            Line::raw("  [7] Docs       - This documentation"),
             Line::raw(""),
             Line::styled(
                 "  SEARCHING MARKETS",
@@ -283,6 +299,69 @@ fn get_doc_content(section: usize) -> Vec<Line<'static>> {
             Line::raw(""),
         ],
         3 => vec![
+            // SIMULATION & TRADING
+            Line::styled(
+                "  ═══════════════════════════════════════════════",
+                Style::default().fg(Color::Cyan),
+            ),
+            Line::styled(
+                "  SIMULATION & TRADING",
+                Style::default().fg(Color::Yellow).bold(),
+            ),
+            Line::styled(
+                "  ═══════════════════════════════════════════════",
+                Style::default().fg(Color::Cyan),
+            ),
+            Line::raw(""),
+            Line::styled("  TWO MODES", Style::default().fg(Color::Green).bold()),
+            Line::raw("  ─────────────────────────────────────────────────"),
+            Line::raw("  • REAL      - trades against your real wallet"),
+            Line::raw("                (CLOB submission is still pending)"),
+            Line::raw("  • SIMULATED - paper trading vs a separate virtual"),
+            Line::raw("                wallet; no real funds ever move"),
+            Line::raw(""),
+            Line::raw("  Simulated orders appear beside real ones with a"),
+            Line::raw("  SIMULATED label, both in Orders and Positions."),
+            Line::raw(""),
+            Line::styled(
+                "  REALISTIC FILLS",
+                Style::default().fg(Color::Green).bold(),
+            ),
+            Line::raw("  ─────────────────────────────────────────────────"),
+            Line::raw("  Both modes price orders against the REAL live"),
+            Line::raw("  order book (volume-weighted across price levels)."),
+            Line::raw("  Simulated fills add a small slippage so paper"),
+            Line::raw("  results stay conservative."),
+            Line::raw(""),
+            Line::styled(
+                "  PLACING A TRADE",
+                Style::default().fg(Color::Green).bold(),
+            ),
+            Line::raw("  ─────────────────────────────────────────────────"),
+            Line::raw("  • In Market Detail, press 'b' to open the form"),
+            Line::raw("    (↑/↓ move pointer, Enter selects a field; on"),
+            Line::raw("    Outcome/Size it opens an edit, on Side/Mode it"),
+            Line::raw("    toggles; land on Submit + Enter to place)"),
+            Line::raw("  • Or commands: /buy <#> <size>, /sell <#> <size>"),
+            Line::raw("  • /sim on|off toggles the command default mode"),
+            Line::raw(""),
+            Line::styled(
+                "  POSITIONS & PnL",
+                Style::default().fg(Color::Green).bold(),
+            ),
+            Line::raw("  ─────────────────────────────────────────────────"),
+            Line::raw("  • Buying rolls into a volume-weighted avg cost"),
+            Line::raw("  • Selling banks realized PnL vs that cost basis"),
+            Line::raw("  • The Positions tab lists holdings and realized PnL"),
+            Line::raw("  • The Dashboard shows real & simulated balances"),
+            Line::raw(""),
+            Line::styled("  AUTO-FALLBACK", Style::default().fg(Color::Green).bold()),
+            Line::raw("  ─────────────────────────────────────────────────"),
+            Line::raw("  If enabled in config, a real buy with insufficient"),
+            Line::raw("  funds is executed as SIMULATED instead of failing."),
+            Line::raw(""),
+        ],
+        4 => vec![
             // SPIKE DETECTION
             Line::styled(
                 "  ═══════════════════════════════════════════════",
@@ -357,7 +436,7 @@ fn get_doc_content(section: usize) -> Vec<Line<'static>> {
             Line::raw("  • Can pause trading during extreme volatility"),
             Line::raw(""),
         ],
-        4 => vec![
+        5 => vec![
             // REFERENCES
             Line::styled(
                 "  ═══════════════════════════════════════════════",

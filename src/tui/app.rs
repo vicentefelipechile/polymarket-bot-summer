@@ -13,9 +13,9 @@ use std::time::Instant;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::data::{OrderInfo, Portfolio};
+use crate::data::{ExecutionMode, OrderInfo, OrderSide, Portfolio, Position};
 use crate::trading::markets::{MarketInfo, MarketService};
-use crate::trading::ExecutionEngine;
+use crate::trading::{ExecutionEngine, TradeRequest};
 
 // =========================================================================================================
 // Types
@@ -26,6 +26,7 @@ use crate::trading::ExecutionEngine;
 pub enum Tab {
     Dashboard,
     Orders,
+    Positions,
     Markets,
     MarketDetail,
     Logs,
@@ -41,6 +42,7 @@ impl Tab {
     pub const ORDER: &'static [Tab] = &[
         Tab::Dashboard,
         Tab::Orders,
+        Tab::Positions,
         Tab::Markets,
         Tab::MarketDetail,
         Tab::Logs,
@@ -77,6 +79,7 @@ impl Tab {
         match self {
             Tab::Dashboard => "Dashboard",
             Tab::Orders => "Orders",
+            Tab::Positions => "Positions",
             Tab::Markets => "Markets",
             Tab::MarketDetail => "Market Detail",
             Tab::Logs => "Logs",
@@ -101,6 +104,79 @@ pub enum InputMode {
     /// Tab-bar navigation: entered with Esc from a panel. Arrows move the highlighted
     /// tab, Enter activates it, Esc cancels back to the panel.
     TabNavigation,
+    /// Buy/sell trade entry form, opened from Market Detail with `b`.
+    TradeEntry,
+}
+
+/// A focusable field in the trade-entry form. The pointer (`>`) rests on one of these
+/// at a time; `↑/↓` move it. `Self::ALL` is the single source of truth for field order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TradeField {
+    Outcome,
+    Side,
+    Mode,
+    Size,
+    Submit,
+}
+
+impl TradeField {
+    pub const ALL: &'static [TradeField] = &[
+        TradeField::Outcome,
+        TradeField::Side,
+        TradeField::Mode,
+        TradeField::Size,
+        TradeField::Submit,
+    ];
+
+    fn index(&self) -> usize {
+        Self::ALL.iter().position(|f| f == self).unwrap_or(0)
+    }
+
+    fn next(&self) -> Self {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    fn prev(&self) -> Self {
+        let len = Self::ALL.len();
+        Self::ALL[(self.index() + len - 1) % len]
+    }
+}
+
+/// State of the trade-entry form. Owns the in-progress order being composed in
+/// `InputMode::TradeEntry`; cleared when the form opens.
+///
+/// Navigation model: a pointer rests on `focus`. `↑/↓` move it between fields. `Enter`
+/// on a binary field (Side/Mode) toggles it in place. `Enter` on a multi-value field
+/// (Outcome/Size) toggles `editing`: while editing, `←/→` or digits mutate that field
+/// and the pointer is "locked" until `Enter`/`Esc` closes the edit.
+#[derive(Debug, Clone)]
+pub struct TradeEntryState {
+    /// Index of the market (in `watched_markets_info`) the form targets.
+    pub market_index: usize,
+    /// Index of the outcome within that market.
+    pub outcome_index: usize,
+    pub side: OrderSide,
+    pub mode: ExecutionMode,
+    /// Size text being typed (shares).
+    pub size_input: String,
+    /// Which field the pointer currently rests on.
+    pub focus: TradeField,
+    /// Whether the focused (multi-value) field is being actively edited.
+    pub editing: bool,
+}
+
+impl Default for TradeEntryState {
+    fn default() -> Self {
+        Self {
+            market_index: 0,
+            outcome_index: 0,
+            side: OrderSide::Buy,
+            mode: ExecutionMode::Simulated,
+            size_input: String::new(),
+            focus: TradeField::Outcome,
+            editing: false,
+        }
+    }
 }
 
 /// Quit confirmation selection
@@ -155,6 +231,8 @@ pub struct App {
     pub logs: Vec<LogEntry>,
     pub portfolio: Option<Portfolio>,
     pub active_orders: Vec<OrderInfo>,
+    /// Open positions (real + simulated), refreshed from the DB.
+    pub positions: Vec<Position>,
     pub is_paused: bool,
     pub last_order_id: Option<String>,
     pub last_refresh: Instant,
@@ -176,6 +254,11 @@ pub struct App {
 
     // Market analysis
     pub market_analysis_data: std::collections::HashMap<String, MarketAnalysis>,
+
+    // Trade entry (buy/sell form opened from Market Detail)
+    pub trade_entry: TradeEntryState,
+    /// Default execution mode for the `/buy` and `/sell` commands; toggled by `/sim on|off`.
+    pub command_trade_mode: ExecutionMode,
 
     // RNG state
     rng_state: u64,
@@ -215,6 +298,7 @@ impl App {
             logs: Vec::new(),
             portfolio: None,
             active_orders: Vec::new(),
+            positions: Vec::new(),
             is_paused: false,
             last_order_id: None,
             last_refresh: Instant::now(),
@@ -230,6 +314,8 @@ impl App {
             selected_watched_market_index: 0,
             is_loading_markets: false,
             market_analysis_data: std::collections::HashMap::new(),
+            trade_entry: TradeEntryState::default(),
+            command_trade_mode: ExecutionMode::Simulated,
 
             rng_state: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -282,7 +368,7 @@ impl App {
                 }
             });
 
-            app.add_log(LogLevel::Success, "AI Chat ready (Tab 7)");
+            app.add_log(LogLevel::Success, "AI Chat ready (Tab 8)");
         } else {
             app.add_log(
                 LogLevel::Warning,
@@ -377,6 +463,24 @@ impl App {
             self.active_orders = orders;
         }
 
+        // Update positions (real + simulated combined for display)
+        let mut positions = Vec::new();
+        if let Ok(real) = self
+            .execution_engine
+            .get_positions(ExecutionMode::Real)
+            .await
+        {
+            positions.extend(real);
+        }
+        if let Ok(sim) = self
+            .execution_engine
+            .get_positions(ExecutionMode::Simulated)
+            .await
+        {
+            positions.extend(sim);
+        }
+        self.positions = positions;
+
         // Simulate market analysis data updates
         self.simulate_market_data();
     }
@@ -453,6 +557,7 @@ impl App {
             InputMode::QuitConfirmation => self.handle_quit_confirmation(event),
             InputMode::LeaveMarketConfirmation => self.handle_leave_confirmation(event).await,
             InputMode::TabNavigation => self.handle_tab_navigation(event),
+            InputMode::TradeEntry => self.handle_trade_entry(event).await,
             InputMode::Normal => self.handle_normal_input(event).await,
         }
     }
@@ -501,6 +606,274 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Open the trade-entry form for the currently selected watched market & outcome.
+    fn open_trade_entry(&mut self) {
+        if self.watched_markets_info.is_empty() {
+            self.add_log(LogLevel::Warning, "No watched markets to trade");
+            return;
+        }
+        self.trade_entry = TradeEntryState {
+            market_index: self.selected_watched_market_index,
+            ..TradeEntryState::default()
+        };
+        self.input_mode = InputMode::TradeEntry;
+    }
+
+    /// Trade-entry keymap: a pointer (`>`) rests on one field; compose and submit an order.
+    ///
+    /// Not editing: `↑/↓` (and `Tab`) move the pointer. `Enter` acts on the focused field —
+    /// Side/Mode toggle in place, Outcome/Size open an edit, Submit places the order.
+    /// `s`/`m` remain quick toggles regardless of focus. While editing Outcome: `←/→` cycle,
+    /// `Enter`/`Esc` close. While editing Size: digits/`.`/Backspace mutate, `Enter`/`Esc`
+    /// close. `Esc` when not editing cancels the whole form.
+    async fn handle_trade_entry(&mut self, event: KeyEvent) -> Result<()> {
+        let outcome_count = self
+            .watched_markets_info
+            .get(self.trade_entry.market_index)
+            .map(|m| m.outcomes.len())
+            .unwrap_or(0);
+
+        if self.trade_entry.editing {
+            self.handle_trade_entry_editing(event, outcome_count);
+            return Ok(());
+        }
+
+        match event.code {
+            // Cancel the whole form.
+            KeyCode::Esc => {
+                self.input_mode = InputMode::Normal;
+            }
+            // Move the pointer between fields.
+            KeyCode::Up => {
+                self.trade_entry.focus = self.trade_entry.focus.prev();
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.trade_entry.focus = self.trade_entry.focus.next();
+            }
+            // Act on the focused field.
+            KeyCode::Enter => self.activate_trade_field().await,
+            // Quick toggles still work regardless of focus.
+            KeyCode::Char('s') | KeyCode::Char('S') => self.toggle_trade_side(),
+            KeyCode::Char('m') | KeyCode::Char('M') => self.toggle_trade_mode(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Enter / activate the field the pointer rests on. Binary fields toggle in place;
+    /// multi-value fields open an edit state; Submit places the order and closes the form.
+    async fn activate_trade_field(&mut self) {
+        match self.trade_entry.focus {
+            TradeField::Side => self.toggle_trade_side(),
+            TradeField::Mode => self.toggle_trade_mode(),
+            TradeField::Outcome | TradeField::Size => {
+                self.trade_entry.editing = true;
+            }
+            TradeField::Submit => {
+                self.submit_trade_entry().await;
+                self.input_mode = InputMode::Normal;
+            }
+        }
+    }
+
+    fn toggle_trade_side(&mut self) {
+        self.trade_entry.side = match self.trade_entry.side {
+            OrderSide::Buy => OrderSide::Sell,
+            OrderSide::Sell => OrderSide::Buy,
+        };
+    }
+
+    fn toggle_trade_mode(&mut self) {
+        self.trade_entry.mode = match self.trade_entry.mode {
+            ExecutionMode::Real => ExecutionMode::Simulated,
+            ExecutionMode::Simulated => ExecutionMode::Real,
+        };
+    }
+
+    /// Keymap while a multi-value field is being edited. `Enter` confirms the edit (and,
+    /// if the size is set, submits the order); `Esc` closes the edit without submitting.
+    fn handle_trade_entry_editing(&mut self, event: KeyEvent, outcome_count: usize) {
+        match (self.trade_entry.focus, event.code) {
+            // Close the edit without leaving the form.
+            (_, KeyCode::Esc) => {
+                self.trade_entry.editing = false;
+            }
+            // Outcome: cycle through the market's outcomes.
+            (TradeField::Outcome, KeyCode::Left) => {
+                if self.trade_entry.outcome_index > 0 {
+                    self.trade_entry.outcome_index -= 1;
+                }
+            }
+            (TradeField::Outcome, KeyCode::Right) => {
+                if self.trade_entry.outcome_index + 1 < outcome_count {
+                    self.trade_entry.outcome_index += 1;
+                }
+            }
+            (TradeField::Outcome, KeyCode::Enter) => {
+                self.trade_entry.editing = false;
+            }
+            // Size: type the share count.
+            (TradeField::Size, KeyCode::Char(c)) if c.is_ascii_digit() || c == '.' => {
+                self.trade_entry.size_input.push(c);
+            }
+            (TradeField::Size, KeyCode::Backspace) => {
+                self.trade_entry.size_input.pop();
+            }
+            (TradeField::Size, KeyCode::Enter) => {
+                self.trade_entry.editing = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// Validate the trade-entry form and submit it to the execution engine.
+    async fn submit_trade_entry(&mut self) {
+        let entry = self.trade_entry.clone();
+        let size: f64 = match entry.size_input.trim().parse() {
+            Ok(s) if s > 0.0 => s,
+            _ => {
+                self.add_log(LogLevel::Warning, "Invalid trade size");
+                return;
+            }
+        };
+
+        let Some(market) = self.watched_markets_info.get(entry.market_index) else {
+            self.add_log(LogLevel::Error, "Selected market no longer available");
+            return;
+        };
+        let outcome_label = market
+            .outcomes
+            .get(entry.outcome_index)
+            .cloned()
+            .unwrap_or_default();
+        let token_id = market
+            .token_ids
+            .get(entry.outcome_index)
+            .cloned()
+            .unwrap_or_default();
+        let request = TradeRequest {
+            market_id: market.id.clone(),
+            token_id,
+            outcome_index: entry.outcome_index,
+            outcome_label: outcome_label.clone(),
+            side: entry.side,
+            size,
+            mode: entry.mode,
+        };
+
+        match self.execution_engine.place_trade(request).await {
+            Ok(order) => {
+                self.add_log(
+                    LogLevel::Success,
+                    &format!(
+                        "{} {} {} '{}' @ ${:.3} ({})",
+                        order.execution_mode.as_str(),
+                        order.side,
+                        order.size,
+                        outcome_label,
+                        order.price,
+                        order.status
+                    ),
+                );
+            }
+            Err(e) => {
+                self.add_log(LogLevel::Error, &format!("Trade failed: {}", e));
+            }
+        }
+    }
+
+    /// `/buy <outcome#> <size>` / `/sell <outcome#> <size>` on the selected watched market.
+    /// `outcome#` is 1-based; mode follows the `/sim` toggle (`command_trade_mode`).
+    async fn command_trade(&mut self, side: OrderSide, args: &[&str]) {
+        if args.len() < 2 {
+            self.add_log(
+                LogLevel::Warning,
+                "Usage: /buy <outcome#> <size>  (e.g. /buy 1 10)",
+            );
+            return;
+        }
+        let outcome_num: usize = match args[0].parse() {
+            Ok(n) if n >= 1 => n,
+            _ => {
+                self.add_log(LogLevel::Warning, "Outcome must be a positive number");
+                return;
+            }
+        };
+        let size: f64 = match args[1].parse() {
+            Ok(s) if s > 0.0 => s,
+            _ => {
+                self.add_log(LogLevel::Warning, "Size must be a positive number");
+                return;
+            }
+        };
+
+        let Some(market) = self
+            .watched_markets_info
+            .get(self.selected_watched_market_index)
+        else {
+            self.add_log(
+                LogLevel::Warning,
+                "No market selected — open Market Detail first",
+            );
+            return;
+        };
+        let outcome_index = outcome_num - 1;
+        let outcome_label = market
+            .outcomes
+            .get(outcome_index)
+            .cloned()
+            .unwrap_or_default();
+        if outcome_label.is_empty() {
+            self.add_log(LogLevel::Warning, "Outcome index out of range");
+            return;
+        }
+        let token_id = market
+            .token_ids
+            .get(outcome_index)
+            .cloned()
+            .unwrap_or_default();
+        let request = TradeRequest {
+            market_id: market.id.clone(),
+            token_id,
+            outcome_index,
+            outcome_label: outcome_label.clone(),
+            side,
+            size,
+            mode: self.command_trade_mode,
+        };
+
+        match self.execution_engine.place_trade(request).await {
+            Ok(order) => self.add_log(
+                LogLevel::Success,
+                &format!(
+                    "{} {} {} '{}' @ ${:.3} ({})",
+                    order.execution_mode.as_str(),
+                    order.side,
+                    order.size,
+                    outcome_label,
+                    order.price,
+                    order.status
+                ),
+            ),
+            Err(e) => self.add_log(LogLevel::Error, &format!("Trade failed: {}", e)),
+        }
+    }
+
+    /// `/sim on|off` — choose whether `/buy` and `/sell` default to simulated or real mode.
+    fn command_sim_toggle(&mut self, args: &[&str]) {
+        match args.first().map(|s| s.to_lowercase()).as_deref() {
+            Some("on") => {
+                self.command_trade_mode = ExecutionMode::Simulated;
+                self.add_log(LogLevel::Info, "Trade mode: SIMULATED");
+            }
+            Some("off") => {
+                self.command_trade_mode = ExecutionMode::Real;
+                self.add_log(LogLevel::Info, "Trade mode: REAL");
+            }
+            _ => self.add_log(LogLevel::Warning, "Usage: /sim on|off"),
+        }
     }
 
     async fn handle_command_input(&mut self, event: KeyEvent) -> Result<()> {
@@ -561,6 +934,15 @@ impl App {
             }
             "/trending" | "trending" | "/t" | "t" => {
                 self.load_trending_markets().await;
+            }
+            "/buy" | "buy" => {
+                self.command_trade(OrderSide::Buy, &args).await;
+            }
+            "/sell" | "sell" => {
+                self.command_trade(OrderSide::Sell, &args).await;
+            }
+            "/sim" | "sim" => {
+                self.command_sim_toggle(&args);
             }
             "/help" | "help" | "/h" | "?" => {
                 self.show_command_help();
@@ -714,6 +1096,22 @@ impl App {
             "/joinmarket <id|#> - Join market by ID or index",
         );
         self.add_log(LogLevel::Info, "/leavemarket <id>  - Leave a market");
+        self.add_log(
+            LogLevel::Info,
+            "/buy <#> <size>    - Buy outcome # on selected market",
+        );
+        self.add_log(
+            LogLevel::Info,
+            "/sell <#> <size>   - Sell outcome # on selected market",
+        );
+        self.add_log(
+            LogLevel::Info,
+            "/sim on|off        - Toggle SIMULATED/REAL trade mode",
+        );
+        self.add_log(
+            LogLevel::Info,
+            "(in Market Detail) b - Open trade-entry form",
+        );
         self.add_log(LogLevel::Info, "/help              - Show this help");
     }
 
@@ -853,7 +1251,7 @@ impl App {
                 KeyCode::Down | KeyCode::Char('j') => {
                     if self.docs_viewing_content {
                         // Line counts for each section (approximate, allows some scrolling past end)
-                        const DOC_LINE_COUNTS: [u16; 5] = [38, 37, 40, 35, 38];
+                        const DOC_LINE_COUNTS: [u16; 6] = [39, 37, 40, 49, 35, 38];
                         let max_scroll = DOC_LINE_COUNTS
                             .get(self.docs_selected_section)
                             .copied()
@@ -862,8 +1260,8 @@ impl App {
                         if self.docs_scroll_offset < max_scroll {
                             self.docs_scroll_offset = self.docs_scroll_offset.saturating_add(1);
                         }
-                    } else if self.docs_selected_section < 4 {
-                        // 5 sections (0-4)
+                    } else if self.docs_selected_section < 5 {
+                        // 6 sections (0-5)
                         self.docs_selected_section += 1;
                     }
                     return Ok(());
@@ -927,6 +1325,11 @@ impl App {
             // Quick trending
             KeyCode::Char('t') | KeyCode::Char('T') => {
                 self.load_trending_markets().await;
+            }
+
+            // Open the buy/sell trade-entry form from Market Detail.
+            KeyCode::Char('b') | KeyCode::Char('B') if self.current_tab == Tab::MarketDetail => {
+                self.open_trade_entry();
             }
 
             // Market navigation (when in Markets or MarketDetail tab)

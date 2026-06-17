@@ -315,6 +315,7 @@ mod tests {
             volume: "1000".to_string(),
             outcomes: vec!["Yes".to_string(), "No".to_string()],
             prices: vec![0.6, 0.4],
+            token_ids: vec!["111".to_string(), "222".to_string()],
         };
 
         let analyzer = MarketAnalyzer {

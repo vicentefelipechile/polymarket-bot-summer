@@ -577,26 +577,59 @@ impl AiChatbot {
             }));
         }
 
-        // Execute trade via ExecutionEngine
-        match self
-            .execution_engine
-            .place_order(market, outcome, amount, price)
-            .await
-        {
-            Ok(order_id) => Ok(json!({
+        // Resolve the outcome's CLOB token id and index so the order can be priced against
+        // the real book. The AI passes the outcome by label; we map it to an index.
+        let (outcome_index, token_id) = self.resolve_outcome(market, outcome).await;
+
+        // Execute trade via ExecutionEngine (real path, with config-gated sim fallback).
+        let request = crate::trading::TradeRequest {
+            market_id: market.to_string(),
+            token_id,
+            outcome_index,
+            outcome_label: outcome.to_string(),
+            side: crate::data::OrderSide::Buy,
+            size: amount,
+            mode: crate::data::ExecutionMode::Real,
+        };
+        match self.execution_engine.place_trade(request).await {
+            Ok(order) => Ok(json!({
                 "success": true,
-                "order_id": order_id,
+                "order_id": order.order_id,
                 "market": market,
                 "outcome": outcome,
                 "amount": amount,
-                "price": price,
-                "message": format!("Order placed: {} @ ${:.2} on {}", outcome, amount, market)
+                "price": order.price,
+                "mode": order.execution_mode.as_str(),
+                "message": format!(
+                    "Order placed ({}): {} @ ${:.2} on {}",
+                    order.execution_mode.as_str(),
+                    outcome,
+                    order.price,
+                    market
+                )
             })),
             Err(e) => Ok(json!({
                 "success": false,
                 "error": format!("Failed to place bet: {}", e)
             })),
         }
+    }
+
+    /// Resolve an outcome label to its `(index, token_id)` for a market, fetching market
+    /// metadata from Gamma. Falls back to `(0, "")` if the market or label can't be resolved
+    /// — the execution engine then surfaces a clear "no token id" error.
+    async fn resolve_outcome(&self, market_id: &str, outcome_label: &str) -> (usize, String) {
+        let service = crate::trading::markets::MarketService::new();
+        let Ok(Some(market)) = service.get_market(market_id).await else {
+            return (0, String::new());
+        };
+        let index = market
+            .outcomes
+            .iter()
+            .position(|o| o.eq_ignore_ascii_case(outcome_label))
+            .unwrap_or(0);
+        let token_id = market.token_ids.get(index).cloned().unwrap_or_default();
+        (index, token_id)
     }
 
     async fn sell_position(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
@@ -610,21 +643,44 @@ impl AiChatbot {
             .get("outcome")
             .and_then(|v| v.as_str())
             .context("Missing outcome parameter")?;
+        // Amount of shares to sell; if omitted, the engine clamps to the held shares.
+        let amount = args.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
-        // TODO: Implement real sell logic
-        // For now, this is a placeholder that simulates selling positions
-        // In a real implementation, this would:
-        // 1. Query current positions from database
-        // 2. Place opposite order to close the position
-        // 3. Update portfolio state
+        let (outcome_index, token_id) = self.resolve_outcome(market, outcome).await;
 
-        Ok(json!({
-            "success": true,
-            "market": market,
-            "outcome": outcome,
-            "message": format!("Position selling initiated for {} on {}", outcome, market),
-            "note": "This is a simulated sell - real implementation pending"
-        }))
+        match self
+            .execution_engine
+            .sell_position(
+                market,
+                &token_id,
+                outcome_index,
+                outcome,
+                amount,
+                crate::data::ExecutionMode::Real,
+            )
+            .await
+        {
+            Ok(order) => Ok(json!({
+                "success": true,
+                "order_id": order.order_id,
+                "market": market,
+                "outcome": outcome,
+                "shares": order.size,
+                "price": order.price,
+                "mode": order.execution_mode.as_str(),
+                "message": format!(
+                    "Sell placed ({}): {:.4} shares of {} on {}",
+                    order.execution_mode.as_str(),
+                    order.size,
+                    outcome,
+                    market
+                )
+            })),
+            Err(e) => Ok(json!({
+                "success": false,
+                "error": format!("Failed to sell position: {}", e)
+            })),
+        }
     }
 
     async fn analyze_market(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
