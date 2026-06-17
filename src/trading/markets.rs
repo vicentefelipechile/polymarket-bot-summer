@@ -254,7 +254,7 @@ impl Default for MarketService {
 // Database Persistence Functions
 // ============================================================================
 
-use crate::database::DbPool;
+use crate::data::DbPool;
 use chrono::Utc;
 
 /// Save a watched market to the database

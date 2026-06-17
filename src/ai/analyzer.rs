@@ -2,8 +2,8 @@
 
 use crate::ai::client::{AiResponse, GeminiClient};
 use crate::ai::personality::{AiPersonality, PersonalityTrait};
-use crate::database::DbPool;
-use crate::markets::MarketInfo;
+use crate::data::DbPool;
+use crate::trading::markets::MarketInfo;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

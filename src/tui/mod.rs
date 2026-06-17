@@ -16,7 +16,7 @@ pub use settings::{SettingsAction, SettingsEditor};
 // Re-export PendingConfirmation from ai::chatbot
 pub use crate::ai::chatbot::PendingConfirmation;
 
-use crate::execution::ExecutionEngine;
+use crate::trading::ExecutionEngine;
 use anyhow::Result;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -29,9 +29,9 @@ use std::sync::Arc;
 
 /// Initialize and run the TUI application
 pub async fn run_tui(
-    db_pool: crate::database::DbPool,
+    db_pool: crate::data::DbPool,
     execution_engine: Arc<ExecutionEngine>,
-    config: &crate::crypto::SecureConfig,
+    config: &crate::config::SecureConfig,
 ) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;

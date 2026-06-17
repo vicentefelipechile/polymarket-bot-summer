@@ -1,6 +1,6 @@
-use crate::execution::ExecutionEngine;
-use crate::markets::{MarketInfo, MarketService};
-use crate::types::{OrderInfo, Portfolio};
+use crate::data::{OrderInfo, Portfolio};
+use crate::trading::markets::{MarketInfo, MarketService};
+use crate::trading::ExecutionEngine;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::Arc;
@@ -118,7 +118,7 @@ pub struct MarketAnalysis {
     pub volume_history: Vec<(i64, f64)>, // timestamp, volume
     pub current_velocity: Option<f64>,
     pub current_obi: Option<f64>,
-    pub recent_events: Vec<crate::types::VolumeVelocityEvent>,
+    pub recent_events: Vec<crate::data::VolumeVelocityEvent>,
 }
 
 impl Default for MarketAnalysis {
@@ -134,7 +134,7 @@ impl Default for MarketAnalysis {
 
 /// Main application state
 pub struct App {
-    pub db_pool: crate::database::DbPool,
+    pub db_pool: crate::data::DbPool,
     pub execution_engine: Arc<ExecutionEngine>,
     pub market_service: MarketService,
     pub current_tab: Tab,
@@ -184,9 +184,9 @@ pub struct App {
 
 impl App {
     pub fn new(
-        db_pool: crate::database::DbPool,
+        db_pool: crate::data::DbPool,
         execution_engine: Arc<ExecutionEngine>,
-        config: &crate::crypto::SecureConfig,
+        config: &crate::config::SecureConfig,
     ) -> Self {
         let mut app = Self {
             db_pool,
@@ -253,8 +253,6 @@ impl App {
                 );
 
                 while let Some(msg) = rx.recv().await {
-                    // Process message
-                    use crate::ai::chatbot::ChatbotResponse;
                     // Send to AI
                     let result = chatbot.send_message(msg).await;
                     // Extract message string from response for now
@@ -281,7 +279,7 @@ impl App {
 
     /// Initialize watched markets - call this after creating App
     pub async fn init_watched_markets(&mut self) {
-        match crate::markets::load_watched_markets(&self.db_pool).await {
+        match crate::trading::markets::load_watched_markets(&self.db_pool).await {
             Ok(markets) => {
                 self.joined_markets = markets.iter().map(|m| m.id.clone()).collect();
                 self.watched_markets_info = markets;
@@ -405,7 +403,7 @@ impl App {
                 if new_vel.abs() > 1000.0 && next_random(&mut rng_state) > 0.95 {
                     entry.recent_events.insert(
                         0,
-                        crate::types::VolumeVelocityEvent {
+                        crate::data::VolumeVelocityEvent {
                             market_id: market_id.clone(),
                             velocity: new_vel,
                             volume_delta: change,
@@ -568,7 +566,7 @@ impl App {
                 if !self.joined_markets.contains(&market_id) {
                     // Save to database
                     if let Err(e) =
-                        crate::markets::save_watched_market(&self.db_pool, &market).await
+                        crate::trading::markets::save_watched_market(&self.db_pool, &market).await
                     {
                         self.add_log(LogLevel::Error, &format!("Failed to save market: {}", e));
                         return;
@@ -605,7 +603,9 @@ impl App {
                 .find(|m| m.id == market_id)
                 .cloned()
             {
-                if let Err(e) = crate::markets::save_watched_market(&self.db_pool, &market).await {
+                if let Err(e) =
+                    crate::trading::markets::save_watched_market(&self.db_pool, &market).await
+                {
                     self.add_log(LogLevel::Error, &format!("Failed to save market: {}", e));
                     return;
                 }
@@ -622,7 +622,9 @@ impl App {
     async fn leave_market(&mut self, market_id: &str) {
         if let Some(pos) = self.joined_markets.iter().position(|m| m == market_id) {
             // Remove from database
-            if let Err(e) = crate::markets::remove_watched_market(&self.db_pool, market_id).await {
+            if let Err(e) =
+                crate::trading::markets::remove_watched_market(&self.db_pool, market_id).await
+            {
                 self.add_log(LogLevel::Error, &format!("Failed to remove from DB: {}", e));
                 return;
             }

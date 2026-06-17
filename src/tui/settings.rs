@@ -1,5 +1,5 @@
 use crate::ai::AiPersonality;
-use crate::crypto::SecureConfig;
+use crate::config::SecureConfig;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},

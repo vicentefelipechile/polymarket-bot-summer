@@ -1,6 +1,6 @@
 use crate::ai::{AiPersonality, GeminiClient, PersonalityTrait};
-use crate::database::DbPool;
-use crate::execution::ExecutionEngine;
+use crate::data::DbPool;
+use crate::trading::ExecutionEngine;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::Row; // For database row access
@@ -436,7 +436,7 @@ impl AiChatbot {
             .context("Missing keywords parameter")?;
 
         // Use MarketService to search Polymarket API
-        let market_service = crate::markets::MarketService::new();
+        let market_service = crate::trading::markets::MarketService::new();
         let markets = market_service
             .search_markets(keywords, 10)
             .await
@@ -628,7 +628,7 @@ impl AiChatbot {
             .context("Missing market_id parameter")?;
 
         // Get market info from database or Polymarket API
-        let market_service = crate::markets::MarketService::new();
+        let market_service = crate::trading::markets::MarketService::new();
         let market_opt = market_service
             .get_market(market_id)
             .await

@@ -1,7 +1,15 @@
-//! Cryptographic utilities for secure configuration storage
+//! Cryptographic primitives for secure configuration storage.
 //!
-//! This module provides encryption and decryption for the `summer.bot` configuration file.
-//! Uses AES-256-GCM for authenticated encryption and Argon2id for password-based key derivation.
+//! Provides AES-256-GCM authenticated encryption with Argon2id password-based key
+//! derivation for the `summer.bot` configuration file. This module only knows how to turn a
+//! `SecureConfig` into encrypted bytes and back; the config type itself lives in
+//! [`crate::config::secure_config`].
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
+use std::path::Path;
 
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
@@ -12,61 +20,23 @@ use argon2::{
     password_hash::{rand_core::RngCore, PasswordHasher, SaltString},
     Argon2,
 };
-use serde::{Deserialize, Serialize};
-use std::path::Path;
 use zeroize::Zeroizing;
 
-/// Configuration data structure for secure storage
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SecureConfig {
-    // Authentication
-    pub private_key: String,
+use crate::config::secure_config::SecureConfig;
 
-    // Trading parameters
-    pub max_order_size: f64,
-    pub min_order_size: f64,
-    pub volume_velocity_threshold: f64,
-    pub obi_threshold: f64,
+// =========================================================================================================
+// Constants
+// =========================================================================================================
 
-    // System
-    pub database_path: String,
-    pub rpc_url: Option<String>,
-
-    // AI Configuration
-    pub gemini_api_key: Option<String>,
-    pub ai_personality: AiPersonality,
-    pub ai_enabled: bool,
-    pub ai_analysis_frequency_minutes: u32,
-}
-
-/// AI personality selection
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum AiPersonality {
-    Summer, // Young, energetic
-    Anna,   // Calm, analytical
-}
-
-impl Default for AiPersonality {
-    fn default() -> Self {
-        Self::Summer
-    }
-}
-
-impl std::fmt::Display for AiPersonality {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Summer => write!(f, "Summer"),
-            Self::Anna => write!(f, "Anna"),
-        }
-    }
-}
-
-/// Binary file format for encrypted configuration:
-/// [Salt (16 bytes)][Nonce (12 bytes)][Encrypted Data][Auth Tag (16 bytes, part of ciphertext)]
+// Binary file format: [Salt (16)][Nonce (12)][Ciphertext + Auth Tag].
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 
-/// Derive a 256-bit encryption key from a password using Argon2id
+// =========================================================================================================
+// Helpers
+// =========================================================================================================
+
+/// Derive a 256-bit encryption key from a password using Argon2id.
 fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     if salt.len() != SALT_LEN {
         anyhow::bail!("Invalid salt length");
@@ -80,7 +50,7 @@ fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
         .hash_password(password.as_bytes(), &salt_string)
         .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?;
 
-    // Extract the raw hash bytes (32 bytes for Argon2)
+    // Extract the raw hash bytes (32 bytes for Argon2).
     let hash_bytes = password_hash.hash.context("Missing hash")?;
     let hash_slice = hash_bytes.as_bytes();
 
@@ -94,31 +64,35 @@ fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     Ok(key)
 }
 
-/// Encrypt configuration data with a password
+// =========================================================================================================
+// Encryption / Decryption
+// =========================================================================================================
+
+/// Encrypt configuration data with a password.
 pub fn encrypt_config(config: &SecureConfig, password: &str) -> Result<Vec<u8>> {
-    // Generate random salt
+    // Generate random salt.
     let mut salt = [0u8; SALT_LEN];
     OsRng.fill_bytes(&mut salt);
 
-    // Derive encryption key from password
+    // Derive encryption key from password.
     let key_bytes = derive_key(password, &salt)?;
     let key = Key::<Aes256Gcm>::from_slice(&*key_bytes);
     let cipher = Aes256Gcm::new(key);
 
-    // Generate random nonce
+    // Generate random nonce.
     let mut nonce_bytes = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    // Serialize configuration
+    // Serialize configuration.
     let plaintext = bincode::serialize(config).context("Failed to serialize config")?;
 
-    // Encrypt
+    // Encrypt.
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_ref())
         .map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
 
-    // Build output: [salt][nonce][ciphertext with auth tag]
+    // Build output: [salt][nonce][ciphertext with auth tag].
     let mut output = Vec::with_capacity(SALT_LEN + NONCE_LEN + ciphertext.len());
     output.extend_from_slice(&salt);
     output.extend_from_slice(&nonce_bytes);
@@ -127,63 +101,68 @@ pub fn encrypt_config(config: &SecureConfig, password: &str) -> Result<Vec<u8>> 
     Ok(output)
 }
 
-/// Decrypt configuration data with a password
+/// Decrypt configuration data with a password.
 pub fn decrypt_config(data: &[u8], password: &str) -> Result<SecureConfig> {
-    // Validate minimum length
+    // Validate minimum length.
     if data.len() < SALT_LEN + NONCE_LEN {
         anyhow::bail!("Invalid encrypted data: too short");
     }
 
-    // Extract components
+    // Extract components.
     let salt = &data[..SALT_LEN];
     let nonce_bytes = &data[SALT_LEN..SALT_LEN + NONCE_LEN];
     let ciphertext = &data[SALT_LEN + NONCE_LEN..];
 
-    // Derive key
+    // Derive key.
     let key_bytes = derive_key(password, salt)?;
     let key = Key::<Aes256Gcm>::from_slice(&*key_bytes);
     let cipher = Aes256Gcm::new(key);
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    // Decrypt
+    // Decrypt.
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
         .map_err(|_| anyhow::anyhow!("Decryption failed: incorrect password or corrupted data"))?;
 
-    // Deserialize
+    // Deserialize.
     let config: SecureConfig =
         bincode::deserialize(&plaintext).context("Failed to deserialize config")?;
 
     Ok(config)
 }
 
-/// Save encrypted configuration to file
+// =========================================================================================================
+// File I/O
+// =========================================================================================================
+
+/// Save encrypted configuration to file.
 pub fn save_config(config: &SecureConfig, path: &Path, password: &str) -> Result<()> {
     let encrypted = encrypt_config(config, password)?;
     std::fs::write(path, encrypted).context("Failed to write config file")?;
     Ok(())
 }
 
-/// Load encrypted configuration from file
+/// Load encrypted configuration from file.
 pub fn load_config(path: &Path, password: &str) -> Result<SecureConfig> {
     let encrypted = std::fs::read(path).context("Failed to read config file")?;
     decrypt_config(&encrypted, password)
 }
 
-/// Change the password for an encrypted configuration file
+/// Change the password for an encrypted configuration file.
 pub fn change_password(path: &Path, old_password: &str, new_password: &str) -> Result<()> {
-    // Load with old password
     let config = load_config(path, old_password)?;
-
-    // Save with new password
     save_config(&config, path, new_password)?;
-
     Ok(())
 }
+
+// =========================================================================================================
+// Tests
+// =========================================================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::secure_config::AiPersonality;
 
     fn test_config() -> SecureConfig {
         SecureConfig {
@@ -234,10 +213,10 @@ mod tests {
         let encrypted1 = encrypt_config(&config, password).unwrap();
         let encrypted2 = encrypt_config(&config, password).unwrap();
 
-        // Different salts mean different ciphertexts
+        // Different salts mean different ciphertexts.
         assert_ne!(encrypted1, encrypted2);
 
-        // But both should decrypt correctly
+        // But both should decrypt correctly.
         let decrypted1 = decrypt_config(&encrypted1, password).unwrap();
         let decrypted2 = decrypt_config(&encrypted2, password).unwrap();
 
@@ -253,20 +232,20 @@ mod tests {
         let old_pass = "old_password";
         let new_pass = "new_password";
 
-        // Save with old password
+        // Save with old password.
         save_config(&config, &config_path, old_pass).unwrap();
 
-        // Change password
+        // Change password.
         change_password(&config_path, old_pass, new_pass).unwrap();
 
-        // Old password should fail
+        // Old password should fail.
         assert!(load_config(&config_path, old_pass).is_err());
 
-        // New password should work
+        // New password should work.
         let loaded = load_config(&config_path, new_pass).unwrap();
         assert_eq!(config.private_key, loaded.private_key);
 
-        // Cleanup
+        // Cleanup.
         std::fs::remove_file(config_path).ok();
     }
 }

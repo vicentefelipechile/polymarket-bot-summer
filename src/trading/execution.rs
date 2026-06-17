@@ -1,4 +1,4 @@
-use crate::types::{BotState, OrderInfo, Portfolio};
+use crate::data::{BotState, OrderInfo, Portfolio};
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -7,11 +7,11 @@ use tokio::sync::RwLock;
 /// This is a placeholder that will be integrated with polymarket-hft
 pub struct ExecutionEngine {
     state: Arc<RwLock<BotState>>,
-    config: crate::crypto::SecureConfig,
+    config: crate::config::SecureConfig,
 }
 
 impl ExecutionEngine {
-    pub fn new(config: crate::crypto::SecureConfig) -> Self {
+    pub fn new(config: crate::config::SecureConfig) -> Self {
         Self {
             state: Arc::new(RwLock::new(BotState::default())),
             config,

@@ -1,5 +1,5 @@
-use crate::database::DbPool;
-use crate::types::VolumeVelocityEvent;
+use crate::data::DbPool;
+use crate::data::VolumeVelocityEvent;
 use anyhow::Result;
 use chrono::Utc;
 use std::collections::HashMap;

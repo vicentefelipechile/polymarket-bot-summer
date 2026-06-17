@@ -1,7 +1,7 @@
 //! AI personality system for user interaction
 
 /// AI personality selection (re-exported from crypto module)
-pub use crate::crypto::AiPersonality;
+pub use crate::config::AiPersonality;
 
 /// Trait for personality-specific behavior
 pub trait PersonalityTrait {

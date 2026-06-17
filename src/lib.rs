@@ -1,29 +1,35 @@
-// Core modules
-pub mod ai;
-pub mod clob_auth;
-pub mod config;
-pub mod crypto;
-pub mod database;
-pub mod execution;
-pub mod markets;
-pub mod onboarding;
-pub mod spike_detection;
-pub mod tui;
-pub mod types;
+//! Polymarket Bot Summer — public library surface.
+//!
+//! The crate is organized into domains. Each domain is a directory module with a `mod.rs`
+//! that wires up its submodules and re-exports their public items:
+//!
+//! - `config`  — `SecureConfig` model and encrypted persistence
+//! - `trading` — CLOB auth, order execution, market data, spike detection
+//! - `data`    — SQLite persistence and shared domain types
+//! - `ai`      — Gemini client, market analyzer, chatbot, personalities
+//! - `tui`     — ratatui terminal UI and its screens
 
+// =========================================================================================================
+// Domains
+// =========================================================================================================
+
+pub mod ai;
+pub mod config;
+pub mod data;
+pub mod trading;
+pub mod tui;
+
+// =========================================================================================================
 // Re-exports
+// =========================================================================================================
+
 pub use ai::{
     AiChatbot, AiPersonality, AiRecommendation, AiResponse, ChatbotResponse, GeminiClient,
     MarketAnalyzer, PendingConfirmation, PersonalityTrait, TradeAction,
 };
-pub use clob_auth::authenticate;
-pub use crypto::{
-    change_password, decrypt_config, encrypt_config, load_config, save_config,
-    AiPersonality as SecureAiPersonality, SecureConfig,
+pub use config::{
+    change_password, decrypt_config, encrypt_config, load_config, save_config, SecureConfig,
 };
-pub use database::{init_database, DbPool};
-pub use execution::ExecutionEngine;
-pub use markets::MarketService;
-pub use onboarding::run_onboarding_checks;
-pub use spike_detection::SpikeDetector;
+pub use data::{init_database, DbPool};
+pub use trading::{authenticate, ExecutionEngine, MarketService, SpikeDetector};
 pub use tui::{run_tui, ChatState, ConfigWizard, PasswordPrompt};
