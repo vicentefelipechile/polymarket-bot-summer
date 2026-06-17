@@ -1,10 +1,24 @@
+//! SQLite persistence: connection pool, WAL mode, and schema creation.
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Pool, Sqlite};
 
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
 pub type DbPool = Pool<Sqlite>;
 
-/// Initialize the database with WAL mode for high concurrency
+// =========================================================================================================
+// Initialization
+// =========================================================================================================
+
+/// Initialize the database with WAL mode for high concurrency.
 pub async fn init_database(database_path: &str) -> Result<DbPool> {
     // Configure SQLite with WAL mode
     let options = SqliteConnectOptions::new()
@@ -24,7 +38,11 @@ pub async fn init_database(database_path: &str) -> Result<DbPool> {
     Ok(pool)
 }
 
-/// Create database schema
+// =========================================================================================================
+// Schema
+// =========================================================================================================
+
+/// Create database schema (idempotent: `CREATE TABLE IF NOT EXISTS`).
 async fn create_schema(pool: &DbPool) -> Result<()> {
     // Markets table
     sqlx::query(

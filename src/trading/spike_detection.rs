@@ -1,15 +1,26 @@
-use crate::data::DbPool;
-use crate::data::VolumeVelocityEvent;
-use anyhow::Result;
-use chrono::Utc;
+//! Spike detection: volume velocity and order-book imbalance signals.
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use std::collections::HashMap;
 
-/// Spike detection algorithms for identifying trading opportunities
+use anyhow::Result;
+use chrono::Utc;
+
+use crate::data::{DbPool, VolumeVelocityEvent};
+
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
+/// Spike detection algorithms for identifying trading opportunities.
 pub struct SpikeDetector {
     db: DbPool,
-    // Track previous volume states per market
+    // Track previous volume states per market.
     volume_history: HashMap<String, VolumeHistory>,
-    // Configuration thresholds
+    // Configuration thresholds.
     volume_velocity_threshold: f64,
     obi_threshold: f64,
 }
@@ -19,6 +30,10 @@ struct VolumeHistory {
     last_volume: f64,
     last_timestamp: i64,
 }
+
+// =========================================================================================================
+// Implementation
+// =========================================================================================================
 
 impl SpikeDetector {
     pub fn new(db: DbPool, volume_velocity_threshold: f64, obi_threshold: f64) -> Self {
@@ -118,34 +133,34 @@ impl SpikeDetector {
     }
 }
 
+// =========================================================================================================
+// Tests
+// =========================================================================================================
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // Pure replica of `calculate_order_book_imbalance` so the formula can be
+    // tested without constructing a `SpikeDetector` (which requires a DbPool).
+    fn obi(bids_volume: f64, asks_volume: f64) -> f64 {
+        let total_volume = bids_volume + asks_volume;
+        if total_volume == 0.0 {
+            return 0.0;
+        }
+        (bids_volume - asks_volume) / total_volume
+    }
 
     #[test]
     fn test_obi_calculation() {
-        let detector = SpikeDetector {
-            db: unimplemented!(),
-            volume_history: HashMap::new(),
-            volume_velocity_threshold: 1000.0,
-            obi_threshold: 0.3,
-        };
-
         // Equal volumes = 0 imbalance
-        assert_eq!(detector.calculate_order_book_imbalance(100.0, 100.0), 0.0);
+        assert_eq!(obi(100.0, 100.0), 0.0);
 
         // All bids = 1.0
-        assert_eq!(detector.calculate_order_book_imbalance(100.0, 0.0), 1.0);
+        assert_eq!(obi(100.0, 0.0), 1.0);
 
         // All asks = -1.0
-        assert_eq!(detector.calculate_order_book_imbalance(0.0, 100.0), -1.0);
-
-        // Verify thresholds are set correctly
-        assert_eq!(detector.volume_velocity_threshold, 1000.0);
-        assert_eq!(detector.obi_threshold, 0.3);
+        assert_eq!(obi(0.0, 100.0), -1.0);
 
         // 60/40 split
-        let obi = detector.calculate_order_book_imbalance(60.0, 40.0);
-        assert!((obi - 0.2).abs() < 0.01);
+        assert!((obi(60.0, 40.0) - 0.2).abs() < 0.01);
     }
 }

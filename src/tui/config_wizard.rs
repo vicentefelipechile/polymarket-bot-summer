@@ -1,17 +1,27 @@
-//! Configuration wizard for first-time setup
+//! Configuration wizard for first-time setup.
 
-use crate::ai::AiPersonality;
-use crate::config::SecureConfig;
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
-/// Configuration wizard for first-time setup
+use crate::ai::AiPersonality;
+use crate::config::SecureConfig;
+use crate::tui::theme::{self, palette};
+
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
+/// Configuration wizard for first-time setup.
 pub struct ConfigWizard {
     step: WizardStep,
 
@@ -46,6 +56,10 @@ enum WizardStep {
     TradingParams,
     Confirmation,
 }
+
+// =========================================================================================================
+// Implementation
+// =========================================================================================================
 
 impl ConfigWizard {
     pub fn new() -> Self {
@@ -302,7 +316,7 @@ impl ConfigWizard {
             return Err("Min order debe ser al menos 0.1".to_string());
         }
 
-        if obi < 0.1 || obi > 0.9 {
+        if !(0.1..=0.9).contains(&obi) {
             return Err("OBI threshold debe estar entre 0.1 y 0.9".to_string());
         }
 
@@ -420,12 +434,8 @@ impl ConfigWizard {
             )));
         }
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
-
         let para = Paragraph::new(lines)
-            .block(block)
+            .block(theme::plain_block(palette::PRIMARY))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: false });
 
@@ -474,12 +484,8 @@ impl ConfigWizard {
             )));
         }
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
-
         let para = Paragraph::new(lines)
-            .block(block)
+            .block(theme::plain_block(palette::PRIMARY))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: false });
 
@@ -527,12 +533,8 @@ impl ConfigWizard {
             )));
         }
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
-
         let para = Paragraph::new(lines)
-            .block(block)
+            .block(theme::plain_block(palette::PRIMARY))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: false });
 
@@ -592,12 +594,8 @@ impl ConfigWizard {
             )));
         }
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
-
         let para = Paragraph::new(lines)
-            .block(block)
+            .block(theme::plain_block(palette::PRIMARY))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: false });
 
@@ -650,12 +648,8 @@ impl ConfigWizard {
             )),
         ];
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Green));
-
         let para = Paragraph::new(lines)
-            .block(block)
+            .block(theme::plain_block(palette::POSITIVE))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: false });
 

@@ -1,15 +1,25 @@
-//! Chat interface for AI chatbot
+//! Chat interface for the AI chatbot: state and rendering.
 
-use crate::ai::chatbot::PendingConfirmation;
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::Modifier,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{List, ListItem, Paragraph},
     Frame,
 };
 
-/// Chat state
+use crate::ai::chatbot::PendingConfirmation;
+use crate::tui::theme::{self, palette};
+
+// =========================================================================================================
+// State
+// =========================================================================================================
+
+/// Chat state.
 pub struct ChatState {
     pub input: String,
     pub input_active: bool,
@@ -58,6 +68,10 @@ impl Default for ChatState {
     }
 }
 
+// =========================================================================================================
+// Rendering
+// =========================================================================================================
+
 /// Render the chat interface
 pub fn render_chat(f: &mut Frame, area: Rect, chat_state: &ChatState) {
     let chunks = Layout::default()
@@ -92,11 +106,11 @@ fn render_chat_history(f: &mut Frame, area: Rect, chat_state: &ChatState) {
         .rev()
         .map(|(role, message)| {
             let style = if role == "user" {
-                Style::default().fg(Color::Cyan)
+                theme::fg(palette::PRIMARY)
             } else if role == "model" {
-                Style::default().fg(Color::Green)
+                theme::fg(palette::POSITIVE)
             } else {
-                Style::default().fg(Color::Yellow)
+                theme::fg(palette::SELECTED)
             };
 
             let prefix = if role == "user" {
@@ -122,12 +136,7 @@ fn render_chat_history(f: &mut Frame, area: Rect, chat_state: &ChatState) {
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(" 💬 AI Chat "),
-    );
+    let list = List::new(items).block(theme::titled_block("💬 AI Chat", palette::PRIMARY));
 
     f.render_widget(list, area);
 }
@@ -148,103 +157,46 @@ fn render_chat_input(f: &mut Frame, area: Rect, chat_state: &ChatState) {
         " Press ENTER to start typing "
     };
 
+    let accent = if chat_state.input_active {
+        palette::POSITIVE
+    } else {
+        palette::PRIMARY
+    };
+
     let input = Paragraph::new(input_text)
-        .style(Style::default().fg(Color::White))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(if chat_state.input_active {
-                    Color::Green
-                } else {
-                    Color::Cyan
-                }))
-                .title(title),
-        );
+        .style(theme::fg(palette::TEXT))
+        .block(theme::titled_block(title, accent));
 
     f.render_widget(input, area);
 }
 
-/// Render confirmation modal for sensitive actions
+/// Render confirmation modal for sensitive actions.
 fn render_confirmation_modal(f: &mut Frame, area: Rect, chat_state: &ChatState) {
     if let Some(ref conf) = chat_state.pending_confirmation {
-        // Create centered modal
-        let modal_width = 60;
-        let modal_height = 12;
-        let x = (area.width.saturating_sub(modal_width)) / 2;
-        let y = (area.height.saturating_sub(modal_height)) / 2;
+        let body = vec![
+            Line::from(Span::styled(
+                "Confirmation Required",
+                theme::fg_bold(palette::SELECTED),
+            )),
+            Line::raw(""),
+            Line::from(Span::styled(
+                conf.description.clone(),
+                theme::fg(palette::TEXT),
+            )),
+            Line::raw(""),
+            Line::from(Span::styled(
+                "← → to toggle, Enter to confirm",
+                theme::fg(palette::MUTED),
+            )),
+        ];
 
-        let modal_area = Rect {
-            x: area.x + x,
-            y: area.y + y,
-            width: modal_width,
-            height: modal_height,
-        };
-
-        // Clear background
-        let background = Block::default().style(Style::default().bg(Color::Black).fg(Color::White));
-        f.render_widget(background, area);
-
-        // Modal content
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(3),    // Description
-                Constraint::Length(3), // Buttons
-            ])
-            .split(modal_area);
-
-        // Title
-        let title = Paragraph::new("⚠️  Confirmation Required")
-            .style(
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL));
-        f.render_widget(title, chunks[0]);
-
-        // Description
-        let desc = Paragraph::new(conf.description.clone())
-            .style(Style::default().fg(Color::White))
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::LEFT | Borders::RIGHT));
-        f.render_widget(desc, chunks[1]);
-
-        // Buttons
-        let yes_style = if conf.selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Green)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Green)
-        };
-
-        let no_style = if !conf.selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Red)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Red)
-        };
-
-        let buttons = Paragraph::new(Line::from(vec![
-            Span::raw("    "),
-            Span::styled("[ YES ]", yes_style),
-            Span::raw("        "),
-            Span::styled("[ NO ]", no_style),
-            Span::raw("    "),
-        ]))
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Use ← → to toggle, Enter to confirm "),
+        theme::confirm_modal(
+            f,
+            area,
+            "⚠️  Confirm Action",
+            palette::DANGER,
+            body,
+            conf.selected,
         );
-        f.render_widget(buttons, chunks[2]);
     }
 }

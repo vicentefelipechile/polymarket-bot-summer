@@ -1,12 +1,27 @@
-use crate::data::{OrderInfo, Portfolio};
-use crate::trading::markets::{MarketInfo, MarketService};
-use crate::trading::ExecutionEngine;
-use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+//! Central TUI application state and event handling.
+//!
+//! `App` owns all view state. State changes happen here (`handle_event`, `refresh_data`);
+//! rendering is render-only and lives in `ui.rs`.
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Available tabs in the TUI
+use anyhow::Result;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use crate::data::{OrderInfo, Portfolio};
+use crate::trading::markets::{MarketInfo, MarketService};
+use crate::trading::ExecutionEngine;
+
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
+/// Available tabs in the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Dashboard,
@@ -80,6 +95,8 @@ pub enum InputMode {
     Command,
     QuitConfirmation,
     LeaveMarketConfirmation,
+    /// Tab-bar navigation: arrows move the highlighted tab, Enter activates it, Esc cancels.
+    TabNavigation,
 }
 
 /// Quit confirmation selection
@@ -113,23 +130,12 @@ pub enum LogLevel {
 }
 
 /// Market analysis data for real-time detection visualization
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MarketAnalysis {
     pub volume_history: Vec<(i64, f64)>, // timestamp, volume
     pub current_velocity: Option<f64>,
     pub current_obi: Option<f64>,
     pub recent_events: Vec<crate::data::VolumeVelocityEvent>,
-}
-
-impl Default for MarketAnalysis {
-    fn default() -> Self {
-        Self {
-            volume_history: Vec::new(),
-            current_velocity: None,
-            current_obi: None,
-            recent_events: Vec::new(),
-        }
-    }
 }
 
 /// Main application state
@@ -138,6 +144,9 @@ pub struct App {
     pub execution_engine: Arc<ExecutionEngine>,
     pub market_service: MarketService,
     pub current_tab: Tab,
+    /// Tab highlighted by the cursor while in `InputMode::TabNavigation`.
+    /// Only `current_tab` decides what content is shown; this is the pending selection.
+    pub highlighted_tab: Tab,
     pub should_quit: bool,
     pub logs: Vec<LogEntry>,
     pub portfolio: Option<Portfolio>,
@@ -182,6 +191,10 @@ pub struct App {
     pub settings_editor: crate::tui::SettingsEditor,
 }
 
+// =========================================================================================================
+// Implementation
+// =========================================================================================================
+
 impl App {
     pub fn new(
         db_pool: crate::data::DbPool,
@@ -193,6 +206,7 @@ impl App {
             execution_engine,
             market_service: MarketService::new(),
             current_tab: Tab::Dashboard,
+            highlighted_tab: Tab::Dashboard,
             should_quit: false,
             logs: Vec::new(),
             portfolio: None,
@@ -258,7 +272,7 @@ impl App {
                     // Extract message string from response for now
                     let response_str = result.map(|r| r.message);
 
-                    if let Err(_) = resp_tx.send(response_str).await {
+                    if resp_tx.send(response_str).await.is_err() {
                         break; // Receiver dropped
                     }
                 }
@@ -434,8 +448,46 @@ impl App {
             InputMode::Command => self.handle_command_input(event).await,
             InputMode::QuitConfirmation => self.handle_quit_confirmation(event),
             InputMode::LeaveMarketConfirmation => self.handle_leave_confirmation(event).await,
+            InputMode::TabNavigation => self.handle_tab_navigation(event),
             InputMode::Normal => self.handle_normal_input(event).await,
         }
+    }
+
+    /// Enter tab-bar navigation mode, starting the cursor on the current tab.
+    fn enter_tab_navigation(&mut self) {
+        self.highlighted_tab = self.current_tab;
+        self.input_mode = InputMode::TabNavigation;
+    }
+
+    /// Tab-bar navigation: arrows/Tab move the highlighted tab, Enter activates it, Esc cancels.
+    fn handle_tab_navigation(&mut self, event: KeyEvent) -> Result<()> {
+        match event.code {
+            // Move the highlight along the tab bar without changing the shown content.
+            KeyCode::Right | KeyCode::Tab => {
+                self.highlighted_tab = self.highlighted_tab.next();
+            }
+            KeyCode::Left | KeyCode::BackTab => {
+                self.highlighted_tab = self.highlighted_tab.prev();
+            }
+            // Activate the highlighted tab and return to normal mode.
+            KeyCode::Enter => {
+                self.current_tab = self.highlighted_tab;
+                self.input_mode = InputMode::Normal;
+            }
+            // Cancel without changing the active tab.
+            KeyCode::Esc => {
+                self.input_mode = InputMode::Normal;
+            }
+            // Numeric keys highlight a tab directly (still requires Enter to activate).
+            KeyCode::Char(c @ '1'..='8') => {
+                let idx = (c as u8 - b'1') as usize;
+                if let Some(tab) = Tab::all().get(idx) {
+                    self.highlighted_tab = *tab;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     async fn handle_command_input(&mut self, event: KeyEvent) -> Result<()> {
@@ -462,7 +514,7 @@ impl App {
     }
 
     async fn execute_command(&mut self, command: &str) {
-        let parts: Vec<&str> = command.trim().split_whitespace().collect();
+        let parts: Vec<&str> = command.split_whitespace().collect();
         if parts.is_empty() {
             return;
         }
@@ -705,13 +757,11 @@ impl App {
                         self.chat_state.handle_char(c);
                         return Ok(());
                     }
-                    // Global navigation (only when NOT in input mode)
-                    KeyCode::Tab | KeyCode::Right if !self.chat_state.input_active => {
-                        self.current_tab = self.current_tab.next();
-                        return Ok(());
-                    }
-                    KeyCode::Left | KeyCode::BackTab if !self.chat_state.input_active => {
-                        self.current_tab = self.current_tab.prev();
+                    // Global navigation (only when NOT in input mode): enter tab-bar nav mode.
+                    KeyCode::Tab | KeyCode::Right | KeyCode::Left | KeyCode::BackTab
+                        if !self.chat_state.input_active =>
+                    {
+                        self.enter_tab_navigation();
                         return Ok(());
                     }
                     KeyCode::Char('q') | KeyCode::Char('Q') if !self.chat_state.input_active => {
@@ -747,17 +797,11 @@ impl App {
                     }
                     return Ok(());
                 }
-                // Global navigation - ONLY when NOT editing
-                KeyCode::Tab if !self.settings_editor.is_editing() => {
-                    self.current_tab = self.current_tab.next();
-                    return Ok(());
-                }
-                KeyCode::Right if !self.settings_editor.is_editing() => {
-                    self.current_tab = self.current_tab.next();
-                    return Ok(());
-                }
-                KeyCode::Left | KeyCode::BackTab if !self.settings_editor.is_editing() => {
-                    self.current_tab = self.current_tab.prev();
+                // Global navigation - ONLY when NOT editing: enter tab-bar nav mode.
+                KeyCode::Tab | KeyCode::Right | KeyCode::Left | KeyCode::BackTab
+                    if !self.settings_editor.is_editing() =>
+                {
+                    self.enter_tab_navigation();
                     return Ok(());
                 }
                 KeyCode::Char('q') | KeyCode::Char('Q') if !self.settings_editor.is_editing() => {
@@ -824,21 +868,23 @@ impl App {
                     }
                     return Ok(());
                 }
-                KeyCode::Backspace | KeyCode::Left | KeyCode::Esc => {
+                KeyCode::Backspace | KeyCode::Esc => {
                     if self.docs_viewing_content {
                         self.docs_viewing_content = false;
                         self.docs_scroll_offset = 0;
-                    } else {
-                        // Allow tab navigation
-                        self.current_tab = self.current_tab.prev();
                     }
+                    return Ok(());
+                }
+                // Tab-bar navigation only when NOT viewing a document's content.
+                KeyCode::Left | KeyCode::BackTab if !self.docs_viewing_content => {
+                    self.enter_tab_navigation();
                     return Ok(());
                 }
                 KeyCode::Right | KeyCode::Tab => {
                     if !self.docs_viewing_content {
-                        self.current_tab = self.current_tab.next();
+                        self.enter_tab_navigation();
                     }
-                    // When viewing content, right arrow does nothing
+                    // When viewing content, arrows do nothing.
                     return Ok(());
                 }
                 KeyCode::Char('q') | KeyCode::Char('Q') => {
@@ -939,12 +985,9 @@ impl App {
                 self.quit_selection = QuitSelection::No; // Default to No
             }
 
-            // Tab navigation
-            KeyCode::Tab | KeyCode::Right => {
-                self.current_tab = self.current_tab.next();
-            }
-            KeyCode::BackTab | KeyCode::Left => {
-                self.current_tab = self.current_tab.prev();
+            // Tab navigation: enter tab-bar nav mode (arrows highlight, Enter activates).
+            KeyCode::Tab | KeyCode::Right | KeyCode::BackTab | KeyCode::Left => {
+                self.enter_tab_navigation();
             }
 
             // Numeric tab selection
@@ -995,7 +1038,7 @@ impl App {
                 self.add_log(LogLevel::Info, ":        : Enter command mode");
                 self.add_log(LogLevel::Info, "S        : Quick search markets");
                 self.add_log(LogLevel::Info, "T        : Load trending markets");
-                self.add_log(LogLevel::Info, "Tab/←/→  : Navigate tabs");
+                self.add_log(LogLevel::Info, "Tab/←/→  : Highlight tabs (Enter to open)");
                 self.add_log(LogLevel::Info, "↑/↓      : Navigate markets list");
                 self.add_log(LogLevel::Info, "Enter    : Join selected market");
                 self.add_log(LogLevel::Info, "P        : Pause bot");

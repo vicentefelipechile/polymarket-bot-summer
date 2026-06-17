@@ -1,20 +1,37 @@
-//! Main entry point for Polymarket Bot Summer
+//! Main entry point for Polymarket Bot Summer.
+//!
+//! Orchestrates startup: logging, config load/unlock, CLOB auth, database, AI task, and the
+//! TUI. Owns the terminal lifecycle for the password prompt and first-run wizard.
 
-use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use polymarket_bot_summer::{
-    authenticate, init_database, run_tui, ConfigWizard, ExecutionEngine, GeminiClient,
-    MarketAnalyzer, PasswordPrompt, SecureConfig, SpikeDetector,
-};
-use ratatui::{backend::CrosstermBackend, Terminal};
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use std::fs::File;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+
+use anyhow::{Context, Result};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use polymarket_bot_summer::{
+    authenticate, init_database, run_tui, ConfigWizard, ExecutionEngine, GeminiClient,
+    MarketAnalyzer, PasswordPrompt, SecureConfig, SpikeDetector,
+};
+
+// =========================================================================================================
+// Constants
+// =========================================================================================================
+
 const CONFIG_PATH: &str = "./summer.bot";
+
+// =========================================================================================================
+// Entry point
+// =========================================================================================================
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -101,7 +118,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Load existing config or run first-time setup wizard
+// =========================================================================================================
+// Config loading
+// =========================================================================================================
+
+/// Load existing config or run first-time setup wizard.
 async fn load_or_create_config() -> Result<SecureConfig> {
     let config_path = Path::new(CONFIG_PATH);
 
@@ -222,7 +243,11 @@ async fn run_first_time_setup(config_path: &Path) -> Result<SecureConfig> {
     Ok(config)
 }
 
-/// Cleanup terminal state
+// =========================================================================================================
+// Terminal & background helpers
+// =========================================================================================================
+
+/// Cleanup terminal state.
 fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(

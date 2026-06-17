@@ -1,15 +1,24 @@
-//! Market analyzer using AI for intelligent trading recommendations
+//! Market analyzer using AI for intelligent trading recommendations.
 
-use crate::ai::client::{AiResponse, GeminiClient};
-use crate::ai::personality::{AiPersonality, PersonalityTrait};
-use crate::data::DbPool;
-use crate::trading::markets::MarketInfo;
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-/// Recommended trading action
+use crate::ai::client::{AiResponse, GeminiClient};
+use crate::ai::personality::{AiPersonality, PersonalityTrait};
+use crate::data::DbPool;
+use crate::trading::markets::MarketInfo;
+
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
+/// Recommended trading action.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TradeAction {
     Buy(String),  // Buy with outcome name
@@ -38,12 +47,16 @@ pub struct AiRecommendation {
     pub timestamp: i64,
 }
 
-/// Market analyzer using AI
+/// Market analyzer using AI.
 pub struct MarketAnalyzer {
     client: GeminiClient,
     personality: AiPersonality,
     db: DbPool,
 }
+
+// =========================================================================================================
+// Implementation
+// =========================================================================================================
 
 impl MarketAnalyzer {
     /// Create a new market analyzer
@@ -274,6 +287,10 @@ IMPORTANTE:
     }
 }
 
+// =========================================================================================================
+// Tests
+// =========================================================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +302,9 @@ mod tests {
         assert_eq!(TradeAction::Sell("No".to_string()).to_string(), "Sell No");
     }
 
+    // `db` is never touched by `build_analysis_prompt`; the `unimplemented!()` placeholder
+    // diverges, which clippy flags as unreachable/unused.
+    #[allow(unreachable_code, unused_variables, clippy::diverging_sub_expression)]
     #[test]
     fn test_prompt_building() {
         let market = MarketInfo {

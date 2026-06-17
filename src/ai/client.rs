@@ -1,22 +1,35 @@
-//! Google Gemini API client for AI-powered market analysis
+//! Google Gemini API client for AI-powered market analysis.
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
+use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use governor::{Quota, RateLimiter};
 use serde::{Deserialize, Serialize};
-use std::num::NonZeroU32;
-use std::sync::Arc;
+
+// =========================================================================================================
+// Constants
+// =========================================================================================================
 
 const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_MODEL: &str = "gemini-2.0-flash";
 
-/// Response from Gemini API
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
+/// Response from Gemini API.
 #[derive(Debug, Clone)]
 pub struct AiResponse {
     pub text: String,
     pub model: String,
 }
 
-/// Gemini API request structures
+/// Gemini API request structures.
 #[derive(Debug, Serialize)]
 struct GenerateContentRequest {
     contents: Vec<Content>,
@@ -60,7 +73,7 @@ struct PartResponse {
     text: String,
 }
 
-/// Client for Google Gemini API
+/// Client for Google Gemini API.
 pub struct GeminiClient {
     api_key: String,
     client: reqwest::Client,
@@ -72,6 +85,10 @@ pub struct GeminiClient {
         >,
     >,
 }
+
+// =========================================================================================================
+// Implementation
+// =========================================================================================================
 
 impl GeminiClient {
     /// Create a new Gemini client with API key
@@ -279,6 +296,10 @@ impl GeminiClient {
         Ok(json_response)
     }
 }
+
+// =========================================================================================================
+// Tests
+// =========================================================================================================
 
 #[cfg(test)]
 mod tests {

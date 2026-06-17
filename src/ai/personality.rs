@@ -1,9 +1,20 @@
-//! AI personality system for user interaction
+//! AI personality system for user interaction.
+//!
+//! Personalities only change the *tone* of AI communication, never the trading decisions
+//! themselves. The prompt strings are intentionally Spanish — they are user-facing AI copy.
 
-/// AI personality selection (re-exported from crypto module)
+// =========================================================================================================
+// Re-exports
+// =========================================================================================================
+
+/// AI personality selection (defined in the config domain).
 pub use crate::config::AiPersonality;
 
-/// Trait for personality-specific behavior
+// =========================================================================================================
+// Trait
+// =========================================================================================================
+
+/// Trait for personality-specific behavior.
 pub trait PersonalityTrait {
     /// Format a message with personality-specific tone
     fn format_message(&self, analysis: &str) -> String;
@@ -15,17 +26,17 @@ pub trait PersonalityTrait {
     fn greeting(&self) -> &'static str;
 }
 
+// =========================================================================================================
+// Implementation
+// =========================================================================================================
+
 impl PersonalityTrait for AiPersonality {
     fn format_message(&self, analysis: &str) -> String {
         match self {
-            AiPersonality::Summer => {
-                // Young, energetic tone - add some enthusiasm
-                format!("¡Hey! 🎯 {}", analysis)
-            }
-            AiPersonality::Anna => {
-                // Calm, analytical tone - straightforward
-                format!("Análisis: {}", analysis)
-            }
+            // Young, energetic tone - add some enthusiasm.
+            AiPersonality::Summer => format!("¡Hey! 🎯 {}", analysis),
+            // Calm, analytical tone - straightforward.
+            AiPersonality::Anna => format!("Análisis: {}", analysis),
         }
     }
 
@@ -71,6 +82,10 @@ impl PersonalityTrait for AiPersonality {
         }
     }
 }
+
+// =========================================================================================================
+// Tests
+// =========================================================================================================
 
 #[cfg(test)]
 mod tests {

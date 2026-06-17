@@ -1,7 +1,16 @@
-//! CLOB Authentication Module
+//! CLOB authentication.
 //!
-//! Provides dynamic authentication with Polymarket CLOB API using the private key.
+//! Provides dynamic authentication with the Polymarket CLOB API using the private key.
 //! The SDK handles all credential management internally.
+//!
+//! Note: this runs at startup, before the TUI owns the terminal, so `println!` is allowed
+//! here (see AGENTS.md §4 logging rule).
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use colored::*;
@@ -10,19 +19,24 @@ use polymarket_client_sdk::{
     clob::{Client, Config},
     POLYGON,
 };
-use std::str::FromStr;
 
-/// Wallet address after successful authentication
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
+/// Wallet address after successful authentication.
 pub struct AuthenticatedClient {
     pub wallet_address: String,
 }
 
-/// Authenticate with the CLOB API using the private key
+// =========================================================================================================
+// Authentication
+// =========================================================================================================
+
+/// Authenticate with the CLOB API using the private key.
 ///
-/// This function:
-/// 1. Creates a signer from the provided private key
-/// 2. Authenticates with the CLOB API
-/// 3. Returns authentication info (wallet address)
+/// Creates a signer from the private key, verifies the connection by authenticating, and
+/// returns the resolved wallet address.
 pub async fn authenticate(private_key: &str) -> Result<AuthenticatedClient> {
     println!("{}", "🔐 Authenticating with Polymarket CLOB...".cyan());
 

@@ -1,10 +1,23 @@
-use crate::tui::app::{App, InputMode, LeaveSelection, LogLevel, QuitSelection, Tab};
+//! TUI rendering. Render-only: reads `App` state and draws via `theme` helpers, never
+//! mutates state or performs IO (that lives in `app.rs`). All styling goes through `theme`.
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap},
+    widgets::{List, ListItem, Paragraph, Tabs, Wrap},
 };
 
-/// Draw the complete TUI
+use crate::tui::app::{App, InputMode, LeaveSelection, LogLevel, QuitSelection, Tab};
+use crate::tui::theme::{self, palette};
+
+// =========================================================================================================
+// Top-level layout
+// =========================================================================================================
+
+/// Draw the complete TUI.
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
@@ -53,6 +66,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
+// =========================================================================================================
+// Panels & tabs
+// =========================================================================================================
+
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let status = if app.is_paused {
         Span::styled(
@@ -86,22 +103,23 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         status,
         markets_info,
     ]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(" Bot Status "),
-    );
+    .block(theme::titled_block("Bot Status", palette::PRIMARY));
 
     frame.render_widget(header, area);
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, app: &App) {
+    let navigating = app.input_mode == InputMode::TabNavigation;
+
     let titles: Vec<Line> = Tab::all()
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            let style = if *t == app.current_tab {
+            let style = if navigating && *t == app.highlighted_tab {
+                // Pending selection while navigating the tab bar (not yet activated).
+                Style::default().fg(Color::Cyan).bold()
+            } else if *t == app.current_tab {
+                // Active tab whose content is currently shown.
                 Style::default().fg(Color::Yellow).bold()
             } else {
                 Style::default().fg(Color::Gray)
@@ -110,10 +128,23 @@ fn draw_tabs(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
+    // The underline highlight follows the cursor while navigating, otherwise the active tab.
+    let selected = if navigating {
+        app.highlighted_tab as usize
+    } else {
+        app.current_tab as usize
+    };
+
+    let title = if navigating {
+        "Navigation (Enter to open, Esc to cancel)"
+    } else {
+        "Navigation"
+    };
+
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(" Navigation "))
-        .highlight_style(Style::default().fg(Color::Yellow).bold())
-        .select(app.current_tab as usize);
+        .block(theme::titled_block(title, palette::PRIMARY))
+        .highlight_style(theme::fg_bold(palette::SELECTED))
+        .select(selected);
 
     frame.render_widget(tabs, area);
 }
@@ -137,12 +168,10 @@ fn draw_command_input(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(&app.command_input, Style::default().fg(Color::White)),
         Span::styled("▌", Style::default().fg(Color::Yellow)),
     ]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
-            .title(" 📝 Command Mode (ESC to cancel) "),
-    );
+    .block(theme::titled_block(
+        "📝 Command Mode (ESC to cancel)",
+        palette::SELECTED,
+    ));
 
     frame.render_widget(input, area);
 }
@@ -198,12 +227,7 @@ fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let portfolio_widget = Paragraph::new(portfolio_text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" 💰 Portfolio ")
-                .border_style(Style::default().fg(Color::Green)),
-        )
+        .block(theme::titled_block("💰 Portfolio", palette::POSITIVE))
         .wrap(Wrap { trim: true });
 
     frame.render_widget(portfolio_widget, left_layout[0]);
@@ -232,12 +256,10 @@ fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
             .collect()
     };
 
-    let joined_widget = Paragraph::new(joined_text).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" 🎯 Monitoring ({}) ", app.joined_markets.len()))
-            .border_style(Style::default().fg(Color::Magenta)),
-    );
+    let joined_widget = Paragraph::new(joined_text).block(theme::titled_block(
+        &format!("🎯 Monitoring ({})", app.joined_markets.len()),
+        palette::ACCENT,
+    ));
 
     frame.render_widget(joined_widget, left_layout[1]);
 
@@ -271,12 +293,8 @@ fn draw_dashboard(frame: &mut Frame, area: Rect, app: &App) {
         ]),
     ];
 
-    let status_widget = Paragraph::new(status_text).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" 📊 System Status ")
-            .border_style(Style::default().fg(Color::Blue)),
-    );
+    let status_widget =
+        Paragraph::new(status_text).block(theme::titled_block("📊 System Status", palette::INFO));
 
     frame.render_widget(status_widget, columns[1]);
 }
@@ -312,12 +330,10 @@ fn draw_orders(frame: &mut Frame, area: Rect, app: &App) {
             .collect()
     };
 
-    let orders_list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" 📋 Active Orders ({}) ", app.active_orders.len()))
-            .border_style(Style::default().fg(Color::Blue)),
-    );
+    let orders_list = List::new(items).block(theme::titled_block(
+        &format!("📋 Active Orders ({})", app.active_orders.len()),
+        palette::INFO,
+    ));
 
     frame.render_widget(orders_list, area);
 }
@@ -363,12 +379,8 @@ fn draw_markets(frame: &mut Frame, area: Rect, app: &App) {
         ])
     };
 
-    let search_widget = Paragraph::new(search_info).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" 🔍 Market Search ")
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
+    let search_widget = Paragraph::new(search_info)
+        .block(theme::titled_block("🔍 Market Search", palette::PRIMARY));
 
     frame.render_widget(search_widget, layout[0]);
 
@@ -455,12 +467,10 @@ fn draw_markets(frame: &mut Frame, area: Rect, app: &App) {
             .collect()
     };
 
-    let markets_list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" 📈 Markets ({}) ", app.available_markets.len()))
-            .border_style(Style::default().fg(Color::Yellow)),
-    );
+    let markets_list = List::new(items).block(theme::titled_block(
+        &format!("📈 Markets ({})", app.available_markets.len()),
+        palette::SELECTED,
+    ));
 
     frame.render_widget(markets_list, layout[1]);
 }
@@ -485,12 +495,7 @@ fn draw_market_detail(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled(" tab to view details", Style::default().fg(Color::Gray)),
             ]),
         ])
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" 📊 Market Detail ")
-                .border_style(Style::default().fg(Color::Yellow)),
-        );
+        .block(theme::titled_block("📊 Market Detail", palette::SELECTED));
         frame.render_widget(msg, area);
         return;
     }
@@ -540,12 +545,7 @@ fn draw_market_detail(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Markets ")
-            .border_style(Style::default().fg(Color::Blue)),
-    );
+    let list = List::new(items).block(theme::titled_block("Markets", palette::INFO));
     frame.render_widget(list, columns[0]);
 
     // COLUMN 2: Market Information
@@ -617,12 +617,7 @@ fn draw_market_detail(frame: &mut Frame, area: Rect, app: &App) {
     ]));
 
     let info_widget = Paragraph::new(info_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" 📋 Market Info ")
-                .border_style(Style::default().fg(Color::Cyan)),
-        )
+        .block(theme::titled_block("📋 Market Info", palette::PRIMARY))
         .wrap(Wrap { trim: true });
 
     frame.render_widget(info_widget, columns[1]);
@@ -692,12 +687,8 @@ fn draw_market_detail(frame: &mut Frame, area: Rect, app: &App) {
         Style::default().fg(Color::Gray),
     ));
 
-    let velocity_widget = Paragraph::new(velocity_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" 📈 Velocity ")
-            .border_style(Style::default().fg(Color::Yellow)),
-    );
+    let velocity_widget =
+        Paragraph::new(velocity_lines).block(theme::titled_block("📈 Velocity", palette::SELECTED));
 
     frame.render_widget(velocity_widget, analysis_layout[0]);
 
@@ -750,12 +741,8 @@ fn draw_market_detail(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
-    let obi_widget = Paragraph::new(obi_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" ⚖️  OBI ")
-            .border_style(Style::default().fg(Color::Magenta)),
-    );
+    let obi_widget =
+        Paragraph::new(obi_lines).block(theme::titled_block("⚖️  OBI", palette::ACCENT));
 
     frame.render_widget(obi_widget, analysis_layout[1]);
 
@@ -791,12 +778,8 @@ fn draw_market_detail(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
-    let events_widget = Paragraph::new(events_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" 🔔 Recent Events ")
-            .border_style(Style::default().fg(Color::Red)),
-    );
+    let events_widget = Paragraph::new(events_lines)
+        .block(theme::titled_block("🔔 Recent Events", palette::DANGER));
 
     frame.render_widget(events_widget, analysis_layout[2]);
 }
@@ -826,12 +809,10 @@ fn draw_logs(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    let logs_list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" 📝 Logs ({}) ", app.logs.len()))
-            .border_style(Style::default().fg(Color::Gray)),
-    );
+    let logs_list = List::new(items).block(theme::titled_block(
+        &format!("📝 Logs ({})", app.logs.len()),
+        palette::MUTED,
+    ));
 
     frame.render_widget(logs_list, area);
 }
@@ -883,12 +864,7 @@ fn draw_docs(frame: &mut Frame, area: Rect, app: &App) {
         " 📚 Documentation "
     };
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(list_title)
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
+    let list = List::new(items).block(theme::titled_block(list_title, palette::PRIMARY));
     frame.render_widget(list, layout[0]);
 
     // Right: Content or Preview
@@ -898,12 +874,10 @@ fn draw_docs(frame: &mut Frame, area: Rect, app: &App) {
         let scroll = app.docs_scroll_offset;
 
         let content_widget = Paragraph::new(content)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" {} ", DOC_SECTIONS[app.docs_selected_section]))
-                    .border_style(Style::default().fg(Color::Yellow)),
-            )
+            .block(theme::titled_block(
+                DOC_SECTIONS[app.docs_selected_section],
+                palette::SELECTED,
+            ))
             .wrap(Wrap { trim: false })
             .scroll((scroll, 0));
         frame.render_widget(content_widget, layout[1]);
@@ -911,16 +885,15 @@ fn draw_docs(frame: &mut Frame, area: Rect, app: &App) {
         // Show preview
         let preview = get_doc_preview(app.docs_selected_section);
         let preview_widget = Paragraph::new(preview)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Preview ")
-                    .border_style(Style::default().fg(Color::Gray)),
-            )
+            .block(theme::titled_block("Preview", palette::MUTED))
             .wrap(Wrap { trim: false });
         frame.render_widget(preview_widget, layout[1]);
     }
 }
+
+// =========================================================================================================
+// Documentation content
+// =========================================================================================================
 
 fn get_doc_preview(section: usize) -> Vec<Line<'static>> {
     match section {
@@ -1319,7 +1292,16 @@ fn get_doc_content(section: usize) -> Vec<Line<'static>> {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let shortcuts = if app.current_tab == Tab::Markets {
+    let shortcuts = if app.input_mode == InputMode::TabNavigation {
+        Line::from(vec![
+            Span::styled(" [←→]", Style::default().fg(Color::Cyan).bold()),
+            Span::raw("Move  "),
+            Span::styled("[Enter]", Style::default().fg(Color::Green).bold()),
+            Span::raw("Open  "),
+            Span::styled("[Esc]", Style::default().fg(Color::Red).bold()),
+            Span::raw("Cancel"),
+        ])
+    } else if app.current_tab == Tab::Markets {
         Line::from(vec![
             Span::styled(" [S]", Style::default().fg(Color::Yellow).bold()),
             Span::raw("earch  "),
@@ -1352,7 +1334,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             Line::from(vec![
                 Span::styled(" [↑↓]", Style::default().fg(Color::Blue).bold()),
                 Span::raw("Scroll  "),
-                Span::styled("[⌫/←]", Style::default().fg(Color::Yellow).bold()),
+                Span::styled("[⌫/Esc]", Style::default().fg(Color::Yellow).bold()),
                 Span::raw("Back  "),
                 Span::styled("[1-6]", Style::default().fg(Color::Cyan).bold()),
                 Span::raw("Tabs  "),
@@ -1389,140 +1371,59 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let footer = Paragraph::new(shortcuts)
-        .block(Block::default().borders(Borders::ALL).title(" Shortcuts "))
+        .block(theme::titled_block("Shortcuts", palette::MUTED))
         .alignment(Alignment::Center);
 
     frame.render_widget(footer, area);
 }
 
+// =========================================================================================================
+// Modals
+// =========================================================================================================
+
 fn draw_quit_confirmation_modal(frame: &mut Frame, area: Rect, app: &App) {
-    // Create centered modal area
-    let modal_width = 50;
-    let modal_height = 7;
+    let body = vec![Line::from(Span::styled(
+        "Are you sure you want to quit?",
+        theme::fg_bold(theme::palette::SELECTED),
+    ))];
 
-    let modal_area = Rect {
-        x: (area.width.saturating_sub(modal_width)) / 2,
-        y: (area.height.saturating_sub(modal_height)) / 2,
-        width: modal_width.min(area.width),
-        height: modal_height.min(area.height),
-    };
-
-    // Clear background
-    frame.render_widget(Clear, modal_area);
-
-    // Modal content
-    let yes_style = if app.quit_selection == QuitSelection::Yes {
-        Style::default().bg(Color::Red).fg(Color::White).bold()
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-
-    let no_style = if app.quit_selection == QuitSelection::No {
-        Style::default().bg(Color::Green).fg(Color::Black).bold()
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-
-    let modal_content = vec![
-        Line::raw(""),
-        Line::from(vec![Span::styled(
-            "  Are you sure you want to quit?",
-            Style::default().fg(Color::Yellow).bold(),
-        )]),
-        Line::raw(""),
-        Line::from(vec![
-            Span::raw("      "),
-            Span::styled("  Yes  ", yes_style),
-            Span::raw("    "),
-            Span::styled("  No  ", no_style),
-        ]),
-        Line::raw(""),
-    ];
-
-    let modal = Paragraph::new(modal_content)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red))
-                .title(" ⚠️  Confirm Quit "),
-        )
-        .alignment(Alignment::Center);
-
-    frame.render_widget(modal, modal_area);
+    theme::confirm_modal(
+        frame,
+        area,
+        "⚠️  Confirm Quit",
+        theme::palette::DANGER,
+        body,
+        app.quit_selection == QuitSelection::Yes,
+    );
 }
 
 fn draw_leave_confirmation_modal(frame: &mut Frame, area: Rect, app: &App) {
-    // Create centered modal area
-    let modal_width = 60;
-    let modal_height = 9;
-
-    let modal_area = Rect {
-        x: (area.width.saturating_sub(modal_width)) / 2,
-        y: (area.height.saturating_sub(modal_height)) / 2,
-        width: modal_width.min(area.width),
-        height: modal_height.min(area.height),
-    };
-
-    // Clear background
-    frame.render_widget(Clear, modal_area);
-
-    // Get market name
     let market_name = app
         .watched_markets_info
         .get(app.selected_watched_market_index)
-        .map(|m| {
-            if m.question.len() > 40 {
-                format!("{}...", &m.question[..40])
-            } else {
-                m.question.clone()
-            }
-        })
+        .map(|m| theme::truncate(&m.question, 40))
         .unwrap_or_else(|| "Unknown".to_string());
 
-    // Modal content
-    let yes_style = if app.leave_selection == LeaveSelection::Yes {
-        Style::default().bg(Color::Red).fg(Color::White).bold()
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-
-    let no_style = if app.leave_selection == LeaveSelection::No {
-        Style::default().bg(Color::Green).fg(Color::Black).bold()
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-
-    let modal_content = vec![
+    let body = vec![
+        Line::from(Span::styled(
+            "Leave this market?",
+            theme::fg_bold(theme::palette::SELECTED),
+        )),
         Line::raw(""),
-        Line::from(vec![Span::styled(
-            "  Leave this market?",
-            Style::default().fg(Color::Yellow).bold(),
-        )]),
-        Line::raw(""),
-        Line::from(vec![Span::styled(
-            format!("  {}", market_name),
-            Style::default().fg(Color::Cyan),
-        )]),
-        Line::raw(""),
-        Line::from(vec![
-            Span::raw("      "),
-            Span::styled("  Yes  ", yes_style),
-            Span::raw("    "),
-            Span::styled("  No  ", no_style),
-        ]),
-        Line::raw(""),
+        Line::from(Span::styled(
+            market_name,
+            theme::fg(theme::palette::PRIMARY),
+        )),
     ];
 
-    let modal = Paragraph::new(modal_content)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
-                .title(" 🚪 Leave Market "),
-        )
-        .alignment(Alignment::Center);
-
-    frame.render_widget(modal, modal_area);
+    theme::confirm_modal(
+        frame,
+        area,
+        "🚪 Leave Market",
+        theme::palette::SELECTED,
+        body,
+        app.leave_selection == LeaveSelection::Yes,
+    );
 }
 
 fn draw_ai_chat(frame: &mut Frame, area: Rect, app: &App) {
@@ -1539,11 +1440,7 @@ fn draw_ai_chat(frame: &mut Frame, area: Rect, app: &App) {
             ),
             Line::raw(""),
         ])
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" AI Chat Disabled "),
-        )
+        .block(theme::titled_block("AI Chat Disabled", palette::MUTED))
         .alignment(Alignment::Center);
         frame.render_widget(msg, area);
     }

@@ -77,6 +77,7 @@ src/
 │
 └── tui/                # presentation domain
     ├── mod.rs          # wiring + run_tui() + the app event loop (lifecycle only)
+    ├── theme.rs        # SINGLE SOURCE OF TRUTH for all TUI styling (see §2.1)
     ├── app.rs          # App: central TUI state + handle_event/refresh_data
     ├── ui.rs           # draw(frame, app): pure rendering, NO state mutation / IO
     ├── events.rs       # EventHandler: tick + input polling
@@ -115,12 +116,52 @@ Refer to items by their domain path: `crate::config::SecureConfig`,
 Each domain's `mod.rs` re-exports its public items, so prefer `crate::<domain>::Item` over
 deep paths unless you need to disambiguate.
 
+### 2.1 TUI rendering — `theme.rs` is mandatory
+
+**All TUI styling goes through `crate::tui::theme`. This is the rule that keeps screens
+consistent.** When a screen builds its own colors/blocks/modals inline, new screens drift
+and the look breaks — which is exactly what `theme.rs` exists to prevent. Treat hand-rolled
+styling in a render path as a bug to fix, not a style preference.
+
+**Never do this in any render code:**
+
+- `Style::default().fg(Color::Cyan)` — raw `Color::*` with an ad-hoc meaning
+- `Block::default().borders(Borders::ALL).title(...).border_style(...)` — inline panel
+- hand-built centered `Rect` + `Clear` + Yes/No buttons for a modal
+- `&s[..n.min(s.len())]` to truncate (panics on non-char boundaries)
+
+**Do this instead — use the helpers:**
+
+| Need | Use |
+|---|---|
+| A semantic color | `theme::palette::{PRIMARY, SELECTED, POSITIVE, DANGER, ACCENT, INFO, TEXT, MUTED, FAINT}` |
+| A foreground style | `theme::fg(color)` / `theme::fg_bold(color)` / `theme::pill(bg, fg)` |
+| A titled bordered panel | `theme::titled_block(title, accent)` |
+| An untitled bordered panel | `theme::plain_block(accent)` |
+| A selectable list row | `theme::selectable_line(text, selected)` (or `row_style` / `row_marker`) |
+| A footer key hint | `theme::key_hint(key, label, accent)` |
+| A centered area | `theme::centered_rect(w, h, area)` |
+| A Yes/No confirmation modal | `theme::confirm_modal(frame, area, title, accent, body, yes_selected)` |
+| Truncating text | `theme::truncate(s, max)` |
+
+**Palette meaning (don't reassign):** `PRIMARY`=titles/branding/primary borders ·
+`SELECTED`=selection/section headers/warnings · `POSITIVE`=success/active/positive values ·
+`DANGER`=errors/danger/secrets/negative · `ACCENT`=secondary accent · `INFO`=info accent ·
+`TEXT`/`MUTED`/`FAINT`=foreground/secondary/least-emphasis text.
+
+**Adding a new screen or panel:** put its render fn in the appropriate `tui/` file (or a new
+one wired through `tui/mod.rs`), keep it render-only (no state mutation/IO — that lives in
+`app.rs`), and build every widget from `theme::`. If you need a style the palette/helpers
+don't cover, **add it to `theme.rs` first**, then use it — never inline a one-off.
+
 ---
 
 ## 3. Code style (enforced on every new/edited file)
 
-This project follows Vicente's universal code-style conventions. Bring any file you touch
-into line; don't leave new code below standard.
+This project follows Vicente's universal code-style conventions. **Every existing `.rs`
+file already conforms** — module `//!` header, 105-char section separators, canonical
+declaration order, and imports grouped std → external → `crate`. Keep new and edited files
+at that standard; never drop below it.
 
 ### File declaration order (top to bottom, no mixing)
 
@@ -200,6 +241,19 @@ imports, ever.
   `CREATE TABLE IF NOT EXISTS`). WAL mode required. Use `sqlx::query`/`query_as`.
 - **AI calls:** go through `GeminiClient` (`ai/client.rs`); rate-limited with `governor`.
   No ad-hoc HTTP to Gemini from feature code.
+- **Input modes (`tui/app.rs`):** all keyboard handling is dispatched by `InputMode` in
+  `App::handle_event`. To add a modal/sub-mode, follow the existing pattern: add an
+  `InputMode` variant, route it in `handle_event`, and give it a **dedicated handler**
+  (`handle_<mode>`). Don't bolt conditional sub-states onto `handle_normal_input` — each
+  mode owns its keymap. Current modes: `Normal`, `Command`, `QuitConfirmation`,
+  `LeaveMarketConfirmation`, `TabNavigation`.
+- **Tab-bar navigation is highlight-then-activate, not instant.** `←`/`→`/`Tab`/`BackTab`
+  enter `InputMode::TabNavigation`, which moves a **highlighted** tab (`App::highlighted_tab`)
+  without changing the shown content; **Enter** activates it (`current_tab = highlighted_tab`)
+  and returns to `Normal`, **Esc** cancels. `current_tab` alone decides rendered content;
+  `highlighted_tab` is only the pending cursor. This separation is deliberate — do not
+  "simplify" it back to arrows switching tabs immediately. Numeric keys `1`–`8` remain
+  direct-activation shortcuts.
 
 ---
 
@@ -213,9 +267,16 @@ cargo build              # debug build
 cargo build --release    # optimized (LTO, opt-level 3) — used for real runs
 cargo run                # launches the TUI (password prompt or first-run wizard)
 cargo test               # unit tests (config validation, crypto roundtrip, ai, spike)
-cargo clippy             # lint — keep clean on touched files
+cargo clippy             # lint — the library is clean; keep it that way
 cargo fmt                # rustfmt — run before committing
 ```
+
+> `cargo clippy` is **clean for the library** (zero warnings). The only remaining warnings
+> are in two unit tests (`ai/analyzer.rs`, `trading/spike_detection.rs`) that build a struct
+> with a `db: unimplemented!()` placeholder — clippy flags the diverging expression as
+> unreachable/unused. These are harmless test scaffolding. The rule is: **keep the library
+> at zero warnings** — don't add new ones, and fix any in a file you touch. Run
+> `cargo fmt` before committing.
 
 - First run with no `./summer.bot` triggers the wizard; later runs ask for the password.
   Delete `./summer.bot` to reset onboarding.
@@ -238,4 +299,4 @@ cargo fmt                # rustfmt — run before committing
 - [ ] Cross-module types in `data/types.rs`; domain-local types in the domain
 - [ ] Errors handled, never silently swallowed; English messages
 - [ ] Declared through its domain `mod.rs` and (if public) re-exported in `lib.rs`
-- [ ] `cargo fmt` + `cargo clippy` clean
+- [ ] `cargo fmt` clean; `cargo clippy` adds no new warnings (fix any in files you touched)

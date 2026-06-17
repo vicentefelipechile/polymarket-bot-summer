@@ -1,15 +1,23 @@
-use crate::ai::{AiPersonality, GeminiClient, PersonalityTrait};
-use crate::data::DbPool;
-use crate::trading::ExecutionEngine;
-use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
-use sqlx::Row; // For database row access
+//! AI chatbot with Gemini function-calling for conversational market actions.
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
-// ============================================================================
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use sqlx::Row;
+
+use crate::ai::{AiPersonality, GeminiClient, PersonalityTrait};
+use crate::data::DbPool;
+use crate::trading::ExecutionEngine;
+
+// =========================================================================================================
 // Gemini API Function Calling Types (Official Format)
-// ============================================================================
+// =========================================================================================================
 
 /// Function declaration in Gemini API format
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,9 +93,9 @@ pub struct FunctionResponse {
     pub response: serde_json::Value,
 }
 
-// ============================================================================
+// =========================================================================================================
 // Chatbot Public API
-// ============================================================================
+// =========================================================================================================
 
 /// Response from chatbot
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,9 +113,9 @@ pub struct PendingConfirmation {
     pub selected: bool, // true = Yes, false = No (for UI toggle)
 }
 
-// ============================================================================
+// =========================================================================================================
 // AI Chatbot
-// ============================================================================
+// =========================================================================================================
 
 pub struct AiChatbot {
     client: GeminiClient,
@@ -177,7 +185,7 @@ impl AiChatbot {
                 .generate_with_tools(
                     &contents_json,
                     &tools_json,
-                    Some(&self.personality.system_prompt()),
+                    Some(self.personality.system_prompt()),
                 )
                 .await
                 .context("Failed to call Gemini API")?;
@@ -272,7 +280,7 @@ impl AiChatbot {
             .generate_with_tools(
                 &contents_json,
                 &tools_json,
-                Some(&self.personality.system_prompt()),
+                Some(self.personality.system_prompt()),
             )
             .await?;
 
@@ -562,7 +570,7 @@ impl AiChatbot {
             }));
         }
 
-        if price < 0.0 || price > 1.0 {
+        if !(0.0..=1.0).contains(&price) {
             return Ok(json!({
                 "success": false,
                 "error": "Price must be between 0.0 and 1.0"

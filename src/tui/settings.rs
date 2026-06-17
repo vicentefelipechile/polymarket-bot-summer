@@ -1,15 +1,27 @@
-use crate::ai::AiPersonality;
-use crate::config::SecureConfig;
+//! In-app settings editor: view and modify the live configuration.
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
-/// Settings editor for viewing and modifying configuration
+use crate::ai::AiPersonality;
+use crate::config::SecureConfig;
+use crate::tui::theme::{self, palette};
+
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
+/// Settings editor for viewing and modifying configuration.
 pub struct SettingsEditor {
     // Editable fields
     pub max_order_size: String,
@@ -38,6 +50,10 @@ pub enum SettingsAction {
     RequestSave,
     CancelChanges,
 }
+
+// =========================================================================================================
+// Implementation
+// =========================================================================================================
 
 impl SettingsEditor {
     /// Create editor from existing config
@@ -241,7 +257,7 @@ impl SettingsEditor {
             return Err("Min order debe ser al menos 0.1".to_string());
         }
 
-        if obi < 0.1 || obi > 0.9 {
+        if !(0.1..=0.9).contains(&obi) {
             return Err("OBI threshold debe estar entre 0.1 y 0.9".to_string());
         }
 
@@ -393,12 +409,8 @@ impl SettingsEditor {
             ]));
         }
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
-
         let para = Paragraph::new(lines)
-            .block(block)
+            .block(theme::plain_block(palette::PRIMARY))
             .wrap(Wrap { trim: false });
         f.render_widget(para, area);
     }
@@ -475,12 +487,8 @@ impl SettingsEditor {
             ]),
         ];
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
-
         let para = Paragraph::new(lines)
-            .block(block)
+            .block(theme::plain_block(palette::PRIMARY))
             .wrap(Wrap { trim: false });
         f.render_widget(para, area);
     }
@@ -511,12 +519,8 @@ impl SettingsEditor {
             ]),
         ];
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
-
         let para = Paragraph::new(lines)
-            .block(block)
+            .block(theme::plain_block(palette::FAINT))
             .wrap(Wrap { trim: false });
         f.render_widget(para, area);
     }

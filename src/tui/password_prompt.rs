@@ -1,15 +1,25 @@
-//! Password prompt screen for encrypted configuration
+//! Password prompt screen for the encrypted configuration.
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
-/// Password prompt state
+use crate::tui::theme::{self, palette};
+
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
+/// Password prompt state.
 pub struct PasswordPrompt {
     password: String,
     error_message: Option<String>,
@@ -22,6 +32,10 @@ enum PasswordStage {
     EnterPassword,
     ConfirmPassword,
 }
+
+// =========================================================================================================
+// Implementation
+// =========================================================================================================
 
 impl PasswordPrompt {
     /// Create a new password prompt (for existing config)
@@ -204,13 +218,8 @@ impl PasswordPrompt {
             Style::default().fg(Color::DarkGray),
         )));
 
-        let input_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(" Password ");
-
         let input_para = Paragraph::new(lines)
-            .block(input_block)
+            .block(theme::titled_block("Password", palette::PRIMARY))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: false });
 

@@ -1,17 +1,37 @@
-use crate::data::{BotState, OrderInfo, Portfolio};
-use anyhow::Result;
+//! Order execution engine.
+//!
+//! Placeholder for the real trading path: order placement, cancellation, portfolio, and
+//! pause/resume state. The actual `polymarket-hft` integration is still stubbed (see the
+//! `// TODO:` markers) — orders do not reach the CLOB yet.
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use std::sync::Arc;
+
+use anyhow::Result;
 use tokio::sync::RwLock;
 
-/// Execution engine for placing and managing orders
-/// This is a placeholder that will be integrated with polymarket-hft
+use crate::config::SecureConfig;
+use crate::data::{BotState, OrderInfo, Portfolio};
+
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
+/// Execution engine for placing and managing orders.
 pub struct ExecutionEngine {
     state: Arc<RwLock<BotState>>,
-    config: crate::config::SecureConfig,
+    config: SecureConfig,
 }
 
+// =========================================================================================================
+// Implementation
+// =========================================================================================================
+
 impl ExecutionEngine {
-    pub fn new(config: crate::config::SecureConfig) -> Self {
+    pub fn new(config: SecureConfig) -> Self {
         Self {
             state: Arc::new(RwLock::new(BotState::default())),
             config,

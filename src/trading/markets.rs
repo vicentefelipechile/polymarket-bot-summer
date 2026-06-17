@@ -1,10 +1,27 @@
+//! Market data: Gamma API fetching, deserialization, and DB-backed watched markets.
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
 use anyhow::Result;
+use chrono::Utc;
 use serde::{Deserialize, Deserializer, Serialize};
-use sqlx::Row; // For .get() method on database rows
+use sqlx::Row;
+
+use crate::data::DbPool;
+
+// =========================================================================================================
+// Constants
+// =========================================================================================================
 
 const GAMMA_API_BASE: &str = "https://gamma-api.polymarket.com";
 
-/// Custom deserializer that handles both JSON arrays and JSON strings containing arrays
+// =========================================================================================================
+// Helpers
+// =========================================================================================================
+
+/// Custom deserializer that handles both JSON arrays and JSON strings containing arrays.
 fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -43,7 +60,11 @@ where
     }
 }
 
-/// Market data from Polymarket Gamma API
+// =========================================================================================================
+// Types
+// =========================================================================================================
+
+/// Market data from Polymarket Gamma API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GammaMarket {
     #[serde(default)]
@@ -160,7 +181,11 @@ impl From<PublicSearchMarket> for MarketInfo {
     }
 }
 
-/// Market service for fetching markets from Polymarket
+// =========================================================================================================
+// Market service
+// =========================================================================================================
+
+/// Market service for fetching markets from Polymarket.
 pub struct MarketService {
     client: reqwest::Client,
 }
@@ -250,14 +275,11 @@ impl Default for MarketService {
     }
 }
 
-// ============================================================================
-// Database Persistence Functions
-// ============================================================================
+// =========================================================================================================
+// Database persistence
+// =========================================================================================================
 
-use crate::data::DbPool;
-use chrono::Utc;
-
-/// Save a watched market to the database
+/// Save a watched market to the database.
 pub async fn save_watched_market(pool: &DbPool, market: &MarketInfo) -> Result<()> {
     let outcomes_json = serde_json::to_string(&market.outcomes)?;
     let prices_json = serde_json::to_string(&market.prices)?;

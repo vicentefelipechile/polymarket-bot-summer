@@ -1,10 +1,38 @@
+//! Presentation domain: ratatui terminal UI, its screens, and the main event loop.
+
+// =========================================================================================================
+// Submodules
+// =========================================================================================================
+
 mod app;
-pub mod chat; // Make chat module public
+pub mod chat;
 pub mod config_wizard;
 mod events;
 mod password_prompt;
 pub mod settings;
+pub mod theme;
 mod ui;
+
+// =========================================================================================================
+// Imports
+// =========================================================================================================
+
+use std::io::stdout;
+use std::sync::Arc;
+
+use anyhow::Result;
+use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::prelude::*;
+
+use crate::trading::ExecutionEngine;
+
+// =========================================================================================================
+// Re-exports
+// =========================================================================================================
 
 pub use app::App;
 pub use chat::ChatState;
@@ -13,21 +41,14 @@ pub use events::EventHandler;
 pub use password_prompt::PasswordPrompt;
 pub use settings::{SettingsAction, SettingsEditor};
 
-// Re-export PendingConfirmation from ai::chatbot
+// Re-export PendingConfirmation from ai::chatbot so screens can reference it via the tui domain.
 pub use crate::ai::chatbot::PendingConfirmation;
 
-use crate::trading::ExecutionEngine;
-use anyhow::Result;
-use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::prelude::*;
-use std::io::stdout;
-use std::sync::Arc;
+// =========================================================================================================
+// Lifecycle
+// =========================================================================================================
 
-/// Initialize and run the TUI application
+/// Initialize and run the TUI application.
 pub async fn run_tui(
     db_pool: crate::data::DbPool,
     execution_engine: Arc<ExecutionEngine>,
