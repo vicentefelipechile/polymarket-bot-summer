@@ -79,7 +79,15 @@ src/
     ├── mod.rs          # wiring + run_tui() + the app event loop (lifecycle only)
     ├── theme.rs        # SINGLE SOURCE OF TRUTH for all TUI styling (see §2.1)
     ├── app.rs          # App: central TUI state + handle_event/refresh_data
-    ├── ui.rs           # draw(frame, app): pure rendering, NO state mutation / IO
+    ├── ui/             # rendering sub-domain: one file per panel, all render-only
+    │   ├── mod.rs      # draw(frame, app) frame layout + draw_content dispatcher (lifecycle)
+    │   ├── chrome.rs   # persistent chrome: header, tab bar, command input, footer
+    │   ├── dashboard.rs# Dashboard panel
+    │   ├── orders.rs   # Orders panel
+    │   ├── markets.rs  # Markets list + Market Detail panels
+    │   ├── logs.rs     # Logs panel
+    │   ├── docs.rs     # Docs panel + its section copy (get_doc_preview/get_doc_content)
+    │   └── modals.rs   # quit / leave-market confirmation modals
     ├── events.rs       # EventHandler: tick + input polling
     ├── chat.rs         # ChatState: AI chat view state
     ├── config_wizard.rs# ConfigWizard: first-run setup flow
@@ -90,8 +98,10 @@ src/
 ### Structure rules (non-negotiable)
 
 - **Every domain is a directory with `mod.rs`.** Never put feature logic in a `mod.rs`; it
-  only declares `pub mod` and re-exports. (The sole exception is `tui/mod.rs`, which owns
-  `run_tui` + the event loop — keep that to lifecycle, not feature logic.)
+  only declares `pub mod` and re-exports. The only `mod.rs` files allowed to hold code are
+  the **lifecycle** ones: `tui/mod.rs` (owns `run_tui` + the event loop) and `tui/ui/mod.rs`
+  (owns the frame `draw` layout + the `draw_content` tab dispatcher). Keep those to
+  lifecycle/wiring — a panel's actual rendering goes in its own `tui/ui/<panel>.rs`.
 - **No flat feature files directly under `src/`.** Only `lib.rs` and `main.rs` live at the
   top level. A new piece of functionality goes inside the domain it belongs to, or a new
   domain directory if it doesn't fit one.
@@ -103,8 +113,12 @@ src/
 - **Cross-module types go in `data/types.rs`.** If two domains need the same struct, it
   lives there. A type used by only one domain stays in that domain (e.g. `MarketInfo` for
   rich market data lives in `trading/markets.rs`, since trading owns it).
-- **`tui/ui.rs` is render-only.** It reads `App` state and draws. State changes happen in
-  `app.rs` (`handle_event`, `refresh_data`). No IO or mutation in the render path.
+- **`tui/ui/` is render-only.** Every file under it reads `App` state and draws — nothing
+  more. State changes happen in `app.rs` (`handle_event`, `refresh_data`). No IO or mutation
+  in the render path. Each panel renderer is a `pub(super) fn draw_<panel>(frame, area, app)`
+  in its own file; `ui/mod.rs` dispatches to it from `draw_content`. **Adding a panel = new
+  `tui/ui/<panel>.rs` with its `draw_*` fn, declare it in `ui/mod.rs`, add its arm to
+  `draw_content`** (and its `Tab` variant per §4).
 - **Everything must be wired in.** A file not declared through a `mod.rs` / `lib.rs` chain
   is dead code — delete it or wire it. (The removed `onboarding.rs` and
   `main_wizard_helper.rs` were exactly this.)
@@ -149,8 +163,8 @@ styling in a render path as a bug to fix, not a style preference.
 `DANGER`=errors/danger/secrets/negative · `ACCENT`=secondary accent · `INFO`=info accent ·
 `TEXT`/`MUTED`/`FAINT`=foreground/secondary/least-emphasis text.
 
-**Adding a new screen or panel:** put its render fn in the appropriate `tui/` file (or a new
-one wired through `tui/mod.rs`), keep it render-only (no state mutation/IO — that lives in
+**Adding a new screen or panel:** put its render fn in a new `tui/ui/<panel>.rs` (wired
+through `tui/ui/mod.rs`), keep it render-only (no state mutation/IO — that lives in
 `app.rs`), and build every widget from `theme::`. If you need a style the palette/helpers
 don't cover, **add it to `theme.rs` first**, then use it — never inline a one-off.
 
@@ -241,19 +255,50 @@ imports, ever.
   `CREATE TABLE IF NOT EXISTS`). WAL mode required. Use `sqlx::query`/`query_as`.
 - **AI calls:** go through `GeminiClient` (`ai/client.rs`); rate-limited with `governor`.
   No ad-hoc HTTP to Gemini from feature code.
+- **Market data (Gamma API):** all market fetching goes through `MarketService`
+  (`trading/markets.rs`) against `https://gamma-api.polymarket.com`. Two endpoints, two
+  response shapes — get them right or you get silent empties:
+  - **Search** → `GET /public-search?q=<kw>&search_profiles=false`. The payload is
+    `{ "events": [ { "markets": [...] } ], "pagination": {...} }` — markets are nested
+    **under `events`**, not a top-level `data` array. A wrong `#[serde(rename)]` here
+    deserializes to an empty `Vec` and search returns nothing with no error (this exact bug
+    once broke search entirely). Flatten `events → markets`, then filter
+    `enable_order_book && !closed` (open + CLOB-tradable). `/public-search` **does** return
+    `conditionId`, `outcomes`, and `outcomePrices` — capture them; don't assume it only has
+    id/question.
+  - **Trending / by-id** → `GET /markets?...` returns a **flat array** of `GammaMarket`.
+  - **Build URLs with the query builder** (`client.get(url).query(&[("q", kw), ...])`), never
+    `format!`-interpolate user keywords into the URL — raw interpolation breaks on spaces and
+    special characters (not URL-encoded).
+  - **JSON quirk:** `outcomes` / `outcomePrices` arrive as *either* a JSON array *or* a
+    JSON-encoded string ("[…]") *or* null. The shared `deserialize_string_or_vec` handles all
+    three — reuse it for any new array-ish Gamma field; don't re-derive plain `Vec<String>`.
+  - Prefer `conditionId` over the numeric `id` for a market's identity (it's what trading
+    uses); fall back to `id` only when `conditionId` is empty.
 - **Input modes (`tui/app.rs`):** all keyboard handling is dispatched by `InputMode` in
   `App::handle_event`. To add a modal/sub-mode, follow the existing pattern: add an
   `InputMode` variant, route it in `handle_event`, and give it a **dedicated handler**
   (`handle_<mode>`). Don't bolt conditional sub-states onto `handle_normal_input` — each
   mode owns its keymap. Current modes: `Normal`, `Command`, `QuitConfirmation`,
   `LeaveMarketConfirmation`, `TabNavigation`.
-- **Tab-bar navigation is highlight-then-activate, not instant.** `←`/`→`/`Tab`/`BackTab`
-  enter `InputMode::TabNavigation`, which moves a **highlighted** tab (`App::highlighted_tab`)
-  without changing the shown content; **Enter** activates it (`current_tab = highlighted_tab`)
-  and returns to `Normal`, **Esc** cancels. `current_tab` alone decides rendered content;
-  `highlighted_tab` is only the pending cursor. This separation is deliberate — do not
-  "simplify" it back to arrows switching tabs immediately. Numeric keys `1`–`8` remain
-  direct-activation shortcuts.
+- **Panel switching is Esc-triggered and highlight-then-activate.** From a panel, **`Esc`**
+  enters `InputMode::TabNavigation`. Inside that mode, `←`/`→`/`Tab`/`BackTab` move a
+  **highlighted** tab (`App::highlighted_tab`) without changing the shown content; **Enter**
+  activates it (`current_tab = highlighted_tab`) and returns to `Normal`, **Esc** cancels.
+  `current_tab` alone decides rendered content; `highlighted_tab` is only the pending cursor.
+  This is deliberate: `←`/`→` are reserved for navigation **inside** a panel (its buttons),
+  and Esc is the single, uniform way to leave a panel — do not rebind arrows to switch tabs
+  directly. Numeric keys `1`–`9` remain direct-activation shortcuts (mapped via
+  `Tab::from_index`). Panels that own `Esc` for their own purpose (Docs content view exits;
+  AI Chat / Settings exit their input/edit sub-state first) only enter `TabNavigation` once
+  that inner state is cleared.
+- **The tab set is data-driven via `Tab::ORDER`.** `Tab::ORDER` (in `tui/app.rs`) is the
+  single source of truth for tab order; `next`/`prev`/`from_index`/`all` all derive from it.
+  **Adding a tab = add the `Tab` variant, list it in `Tab::ORDER`, add its `title()` arm,
+  and add its `draw_content` arm in `tui/ui/mod.rs` (pointing at a `tui/ui/<panel>.rs`).**
+  Do **not** reintroduce hardcoded per-number
+  `match` arms for activation or hand-written `next`/`prev` chains — numeric activation goes
+  through `App::activate_tab_by_number` / `Tab::from_index`.
 
 ---
 
