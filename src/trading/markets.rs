@@ -104,9 +104,11 @@ pub struct GammaMarket {
 /// Helper structs for /public-search response
 #[derive(Debug, Deserialize)]
 struct PublicSearchResponse {
-    #[serde(default, rename = "data")]
+    // The Gamma /public-search payload nests markets under an `events` array
+    // (`{ "events": [...], "pagination": {...} }`). This field MUST match that key —
+    // a wrong rename silently deserializes to an empty Vec and search returns nothing.
+    #[serde(default)]
     events: Vec<PublicSearchEvent>,
-    // Removed unused fields: tags, profiles, pagination
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,12 +122,26 @@ struct PublicSearchEvent {
 pub struct PublicSearchMarket {
     pub id: String,
     pub question: String,
+    // The CLOB-tradable identifier; prefer it over the numeric `id` so joined markets
+    // carry the same id trading uses. May be empty for some results.
+    #[serde(rename = "conditionId", default)]
+    pub condition_id: String,
     #[serde(default)]
     pub volume: Option<String>,
     #[serde(default)]
     pub closed: bool,
     #[serde(rename = "enableOrderBook", default)]
     pub enable_order_book: bool,
+    // /public-search DOES return outcomes and prices — capture them so search results
+    // show prices like trending does, instead of blank rows.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub outcomes: Vec<String>,
+    #[serde(
+        rename = "outcomePrices",
+        default,
+        deserialize_with = "deserialize_string_or_vec"
+    )]
+    pub outcome_prices: Vec<String>,
 }
 
 /// Simplified market info for display
@@ -169,14 +185,27 @@ impl From<GammaMarket> for MarketInfo {
 
 impl From<PublicSearchMarket> for MarketInfo {
     fn from(m: PublicSearchMarket) -> Self {
+        let prices: Vec<f64> = m
+            .outcome_prices
+            .iter()
+            .filter_map(|p| p.parse::<f64>().ok())
+            .collect();
+
+        // Prefer the CLOB condition id; fall back to the numeric id when absent.
+        let id = if m.condition_id.is_empty() {
+            m.id
+        } else {
+            m.condition_id
+        };
+
         Self {
-            id: m.id,
+            id,
             question: m.question,
             active: !m.closed,
             order_book_enabled: m.enable_order_book,
             volume: m.volume.unwrap_or_else(|| "0".to_string()),
-            outcomes: Vec::new(), // public-search doesn't provide outcomes
-            prices: Vec::new(),   // public-search doesn't provide prices
+            outcomes: m.outcomes,
+            prices,
         }
     }
 }
@@ -198,13 +227,17 @@ impl MarketService {
     }
 
     /// Search markets by keyword using /public-search
-    pub async fn search_markets(&self, keyword: &str, _limit: usize) -> Result<Vec<MarketInfo>> {
-        let url = format!(
-            "{}/public-search?q={}&search_profiles=false",
-            GAMMA_API_BASE, keyword
-        );
+    pub async fn search_markets(&self, keyword: &str, limit: usize) -> Result<Vec<MarketInfo>> {
+        let url = format!("{}/public-search", GAMMA_API_BASE);
 
-        let response = self.client.get(&url).send().await?;
+        // Use the query builder so the keyword is URL-encoded — interpolating it raw
+        // breaks on spaces and special characters.
+        let response = self
+            .client
+            .get(&url)
+            .query(&[("q", keyword), ("search_profiles", "false")])
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             anyhow::bail!("Failed to fetch markets: {}", response.status());
@@ -224,7 +257,7 @@ impl MarketService {
             .into_iter()
             .filter(|m| m.enable_order_book && !m.closed)
             .map(|m| m.into())
-            .take(20)
+            .take(limit)
             .collect();
 
         Ok(filtered)
