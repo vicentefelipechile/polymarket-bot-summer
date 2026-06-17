@@ -653,7 +653,7 @@ impl App {
                 self.trade_entry.focus = self.trade_entry.focus.next();
             }
             // Act on the focused field.
-            KeyCode::Enter => self.activate_trade_field().await,
+            KeyCode::Enter => self.activate_trade_field(outcome_count).await,
             // Quick toggles still work regardless of focus.
             KeyCode::Char('s') | KeyCode::Char('S') => self.toggle_trade_side(),
             KeyCode::Char('m') | KeyCode::Char('M') => self.toggle_trade_mode(),
@@ -664,10 +664,16 @@ impl App {
 
     /// Enter / activate the field the pointer rests on. Binary fields toggle in place;
     /// multi-value fields open an edit state; Submit places the order and closes the form.
-    async fn activate_trade_field(&mut self) {
+    ///
+    /// Outcome is binary when the market has exactly two outcomes — then `Enter` flips
+    /// between them in place instead of opening the `←/→` edit.
+    async fn activate_trade_field(&mut self, outcome_count: usize) {
         match self.trade_entry.focus {
             TradeField::Side => self.toggle_trade_side(),
             TradeField::Mode => self.toggle_trade_mode(),
+            TradeField::Outcome if outcome_count == 2 => {
+                self.trade_entry.outcome_index = 1 - self.trade_entry.outcome_index;
+            }
             TradeField::Outcome | TradeField::Size => {
                 self.trade_entry.editing = true;
             }
