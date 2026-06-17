@@ -35,30 +35,42 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub fn next(&self) -> Self {
-        match self {
-            Tab::Dashboard => Tab::Orders,
-            Tab::Orders => Tab::Markets,
-            Tab::Markets => Tab::MarketDetail,
-            Tab::MarketDetail => Tab::Logs,
-            Tab::Logs => Tab::Docs,
-            Tab::Docs => Tab::AiChat,
-            Tab::AiChat => Tab::Settings,
-            Tab::Settings => Tab::Dashboard,
-        }
+    /// The single source of truth for tab order. Adding a tab here (plus its `title()`
+    /// arm and `draw_content` arm) wires it into navigation, numeric shortcuts and the
+    /// tab bar automatically — `next`/`prev`/`from_index` all derive from this slice.
+    pub const ORDER: &'static [Tab] = &[
+        Tab::Dashboard,
+        Tab::Orders,
+        Tab::Markets,
+        Tab::MarketDetail,
+        Tab::Logs,
+        Tab::Docs,
+        Tab::AiChat,
+        Tab::Settings,
+    ];
+
+    /// Position of this tab within `ORDER`. Every variant is listed, so the lookup
+    /// always succeeds; `0` is a safe fallback that keeps callers total.
+    fn index(&self) -> usize {
+        Self::ORDER.iter().position(|t| t == self).unwrap_or(0)
     }
 
+    /// The tab at the given 0-based position, if any. Used by numeric shortcuts.
+    pub fn from_index(index: usize) -> Option<Self> {
+        Self::ORDER.get(index).copied()
+    }
+
+    /// Next tab in `ORDER`, wrapping around to the first.
+    pub fn next(&self) -> Self {
+        let next = (self.index() + 1) % Self::ORDER.len();
+        Self::ORDER[next]
+    }
+
+    /// Previous tab in `ORDER`, wrapping around to the last.
     pub fn prev(&self) -> Self {
-        match self {
-            Tab::Dashboard => Tab::Settings,
-            Tab::Orders => Tab::Dashboard,
-            Tab::Markets => Tab::Orders,
-            Tab::MarketDetail => Tab::Markets,
-            Tab::Logs => Tab::MarketDetail,
-            Tab::Docs => Tab::Logs,
-            Tab::AiChat => Tab::Docs,
-            Tab::Settings => Tab::AiChat,
-        }
+        let len = Self::ORDER.len();
+        let prev = (self.index() + len - 1) % len;
+        Self::ORDER[prev]
     }
 
     pub fn title(&self) -> &'static str {
@@ -74,17 +86,8 @@ impl Tab {
         }
     }
 
-    pub fn all() -> [Tab; 8] {
-        [
-            Tab::Dashboard,
-            Tab::Orders,
-            Tab::Markets,
-            Tab::MarketDetail,
-            Tab::Logs,
-            Tab::Docs,
-            Tab::AiChat,
-            Tab::Settings,
-        ]
+    pub fn all() -> &'static [Tab] {
+        Self::ORDER
     }
 }
 
@@ -95,7 +98,8 @@ pub enum InputMode {
     Command,
     QuitConfirmation,
     LeaveMarketConfirmation,
-    /// Tab-bar navigation: arrows move the highlighted tab, Enter activates it, Esc cancels.
+    /// Tab-bar navigation: entered with Esc from a panel. Arrows move the highlighted
+    /// tab, Enter activates it, Esc cancels back to the panel.
     TabNavigation,
 }
 
@@ -459,6 +463,15 @@ impl App {
         self.input_mode = InputMode::TabNavigation;
     }
 
+    /// Directly activate the tab mapped to a `'1'..='9'` key, if one exists.
+    /// Centralizes numeric shortcuts so adding a tab to `Tab::ORDER` is enough.
+    fn activate_tab_by_number(&mut self, key: char) {
+        let idx = (key as u8 - b'1') as usize;
+        if let Some(tab) = Tab::from_index(idx) {
+            self.current_tab = tab;
+        }
+    }
+
     /// Tab-bar navigation: arrows/Tab move the highlighted tab, Enter activates it, Esc cancels.
     fn handle_tab_navigation(&mut self, event: KeyEvent) -> Result<()> {
         match event.code {
@@ -479,10 +492,10 @@ impl App {
                 self.input_mode = InputMode::Normal;
             }
             // Numeric keys highlight a tab directly (still requires Enter to activate).
-            KeyCode::Char(c @ '1'..='8') => {
+            KeyCode::Char(c @ '1'..='9') => {
                 let idx = (c as u8 - b'1') as usize;
-                if let Some(tab) = Tab::all().get(idx) {
-                    self.highlighted_tab = *tab;
+                if let Some(tab) = Tab::from_index(idx) {
+                    self.highlighted_tab = tab;
                 }
             }
             _ => {}
@@ -739,11 +752,13 @@ impl App {
                         }
                         return Ok(());
                     }
-                    // ESC: Cancel input mode
+                    // ESC: cancel input mode if active, otherwise enter tab-bar nav mode.
                     KeyCode::Esc => {
                         if self.chat_state.input_active {
                             self.chat_state.input_active = false;
                             self.chat_state.clear_input();
+                        } else {
+                            self.enter_tab_navigation();
                         }
                         return Ok(());
                     }
@@ -755,13 +770,6 @@ impl App {
                     // Text input (only in input mode)
                     KeyCode::Char(c) if self.chat_state.input_active => {
                         self.chat_state.handle_char(c);
-                        return Ok(());
-                    }
-                    // Global navigation (only when NOT in input mode): enter tab-bar nav mode.
-                    KeyCode::Tab | KeyCode::Right | KeyCode::Left | KeyCode::BackTab
-                        if !self.chat_state.input_active =>
-                    {
-                        self.enter_tab_navigation();
                         return Ok(());
                     }
                     KeyCode::Char('q') | KeyCode::Char('Q') if !self.chat_state.input_active => {
@@ -797,10 +805,9 @@ impl App {
                     }
                     return Ok(());
                 }
-                // Global navigation - ONLY when NOT editing: enter tab-bar nav mode.
-                KeyCode::Tab | KeyCode::Right | KeyCode::Left | KeyCode::BackTab
-                    if !self.settings_editor.is_editing() =>
-                {
+                // Global navigation - ONLY when NOT editing: Esc enters tab-bar nav mode.
+                // (While editing, Esc is handled by the editor to exit edit mode.)
+                KeyCode::Esc if !self.settings_editor.is_editing() => {
                     self.enter_tab_navigation();
                     return Ok(());
                 }
@@ -868,23 +875,22 @@ impl App {
                     }
                     return Ok(());
                 }
-                KeyCode::Backspace | KeyCode::Esc => {
+                // Backspace exits a document's content view back to the section list.
+                KeyCode::Backspace => {
                     if self.docs_viewing_content {
                         self.docs_viewing_content = false;
                         self.docs_scroll_offset = 0;
                     }
                     return Ok(());
                 }
-                // Tab-bar navigation only when NOT viewing a document's content.
-                KeyCode::Left | KeyCode::BackTab if !self.docs_viewing_content => {
-                    self.enter_tab_navigation();
-                    return Ok(());
-                }
-                KeyCode::Right | KeyCode::Tab => {
-                    if !self.docs_viewing_content {
+                // Esc exits content view if open, otherwise enters tab-bar nav mode.
+                KeyCode::Esc => {
+                    if self.docs_viewing_content {
+                        self.docs_viewing_content = false;
+                        self.docs_scroll_offset = 0;
+                    } else {
                         self.enter_tab_navigation();
                     }
-                    // When viewing content, arrows do nothing.
                     return Ok(());
                 }
                 KeyCode::Char('q') | KeyCode::Char('Q') => {
@@ -892,28 +898,8 @@ impl App {
                     self.quit_selection = QuitSelection::No;
                     return Ok(());
                 }
-                KeyCode::Char('1') => {
-                    self.current_tab = Tab::Dashboard;
-                    return Ok(());
-                }
-                KeyCode::Char('2') => {
-                    self.current_tab = Tab::Orders;
-                    return Ok(());
-                }
-                KeyCode::Char('3') => {
-                    self.current_tab = Tab::Markets;
-                    return Ok(());
-                }
-                KeyCode::Char('4') => {
-                    self.current_tab = Tab::MarketDetail;
-                    return Ok(());
-                }
-                KeyCode::Char('5') => {
-                    self.current_tab = Tab::Logs;
-                    return Ok(());
-                }
-                KeyCode::Char('6') => {
-                    self.current_tab = Tab::Docs;
+                KeyCode::Char(c @ '1'..='9') => {
+                    self.activate_tab_by_number(c);
                     return Ok(());
                 }
                 KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -985,20 +971,16 @@ impl App {
                 self.quit_selection = QuitSelection::No; // Default to No
             }
 
-            // Tab navigation: enter tab-bar nav mode (arrows highlight, Enter activates).
-            KeyCode::Tab | KeyCode::Right | KeyCode::BackTab | KeyCode::Left => {
+            // Tab-bar navigation: Esc enters the panel switcher (arrows highlight, Enter
+            // activates). Arrows are reserved for navigation *inside* a panel.
+            KeyCode::Esc => {
                 self.enter_tab_navigation();
             }
 
-            // Numeric tab selection
-            KeyCode::Char('1') => self.current_tab = Tab::Dashboard,
-            KeyCode::Char('2') => self.current_tab = Tab::Orders,
-            KeyCode::Char('3') => self.current_tab = Tab::Markets,
-            KeyCode::Char('4') => self.current_tab = Tab::MarketDetail,
-            KeyCode::Char('5') => self.current_tab = Tab::Logs,
-            KeyCode::Char('6') => self.current_tab = Tab::Docs,
-            KeyCode::Char('7') => self.current_tab = Tab::AiChat,
-            KeyCode::Char('8') => self.current_tab = Tab::Settings,
+            // Numeric tab selection (direct activation shortcut).
+            KeyCode::Char(c @ '1'..='9') => {
+                self.activate_tab_by_number(c);
+            }
 
             // Pause/Resume
             KeyCode::Char('p') | KeyCode::Char('P') => {
@@ -1038,7 +1020,7 @@ impl App {
                 self.add_log(LogLevel::Info, ":        : Enter command mode");
                 self.add_log(LogLevel::Info, "S        : Quick search markets");
                 self.add_log(LogLevel::Info, "T        : Load trending markets");
-                self.add_log(LogLevel::Info, "Tab/←/→  : Highlight tabs (Enter to open)");
+                self.add_log(LogLevel::Info, "Esc      : Switch panels (←/→ then Enter)");
                 self.add_log(LogLevel::Info, "↑/↓      : Navigate markets list");
                 self.add_log(LogLevel::Info, "Enter    : Join selected market");
                 self.add_log(LogLevel::Info, "P        : Pause bot");
